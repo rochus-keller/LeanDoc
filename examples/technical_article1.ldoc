@@ -1,0 +1,588 @@
+= LeanDoc Parser Implementation Guide
+Technical Documentation Team
+v2.0, 2026-01-09
+:toc: left
+:toclevels: 3
+:numbered:
+:source-highlighter: pygments
+:stem:
+:experimental:
+:project-name: LeanDoc Parser
+:project-version: 2.0
+
+[abstract]
+== Abstract
+
+This document describes the implementation of a production-quality parser for the LeanDoc document language. It covers lexical analysis, syntax analysis, semantic checking, and code generation.
+
+== Architecture Overview
+
+.System Architecture
+image::architecture-diagram.svg[System Architecture,800,600,align=center]
+
+The {project-name} consists of four main components:
+
+[#components]
+Lexer:: Tokenizes input stream
+Parser:: Builds abstract syntax tree (AST)
+Semantic Analyzer:: Validates document structure
+Generator:: Produces output formats
+
+=== Component Interaction
+
+The data flow follows this sequence:
+
+[listing]
+----
+Input Document → Lexer → Token Stream → Parser → AST → 
+Semantic Analyzer → Validated AST → Generator → Output
+----
+
+ifdef::include-performance[]
+=== Performance Characteristics
+
+The parser achieves stem:[O(n)] time complexity where stem:[n] is the input size.
+
+[stem]
+++++
+T(n) = c_1 \cdot n + c_2
+++++
+
+Where:
+
+* stem:[c_1] is the per-character processing cost
+* stem:[c_2] is the initialization overhead
+endif::[]
+
+== Lexical Analysis
+
+=== Token Categories
+
+The lexer recognizes these token categories:
+
+[cols="2,3,2",options="header"]
+|===
+|Category |Examples |Count
+
+|Keywords
+|if, ifdef, endif
+|15
+
+|Delimiters
+|`====`, `----`, `____`
+|8
+
+|Inline Markers
+|`*`, `_`, `` ` ``
+|12
+
+|Operators
+|`::`, `[]`, `{}`
+|6
+|===
+
+=== State Machine
+
+The lexer uses a deterministic finite automaton (DFA):
+
+[plantuml,lexer-dfa,svg]
+....
+@startuml
+[*] --> Start
+Start --> InWord : letter
+Start --> InNumber : digit
+Start --> Delimiter : delimiter_char
+InWord --> InWord : alnum
+InWord --> [*] : whitespace
+InNumber --> InNumber : digit
+InNumber --> [*] : !digit
+Delimiter --> CheckDelimiter : same_char
+CheckDelimiter --> Delimiter : same_char
+CheckDelimiter --> [*] : different_char
+@enduml
+....
+
+=== Implementation
+
+[source,c]
+----
+typedef struct {
+    const char* input;
+    size_t pos;
+    size_t line;
+    size_t column;
+} Lexer;
+
+Token lexer_next_token(Lexer* lex) {
+    skip_whitespace(lex);
+    
+    if (lex->pos >= strlen(lex->input)) {
+        return make_token(TOK_EOF, "", lex->line, lex->column);
+    }
+    
+    char c = lex->input[lex->pos];
+    
+    // Check for block delimiters
+    if (is_delimiter_char(c) && at_line_start(lex)) {
+        return scan_delimiter(lex); // <1>
+    }
+    
+    // Check for inline markup
+    if (is_markup_char(c)) {
+        return scan_markup(lex); // <2>
+    }
+    
+    // Scan regular text
+    return scan_text(lex); // <3>
+}
+----
+<1> Scans sequences of 4+ identical delimiter characters
+<2> Handles `*`, `_`, `` ` ``, etc.
+<3> Returns runs of regular text
+
+TIP: Use kbd:[Ctrl+C] to interrupt the lexer during debugging.
+
+== Syntax Analysis
+
+=== Grammar Structure
+
+The grammar is designed for LL(k) parsing with stem:[k \leq 6]:
+
+[source,ebnf]
+----
+Document     = [Header] Body ;
+Header       = Title [Author] [Revision] Attributes* ;
+Body         = Block* ;
+Block        = Section | Paragraph | DelimitedBlock | List | Table ;
+Section      = SectionTitle Block* ;
+SectionTitle = '='{1..6} TEXT NL ;
+----
+
+=== Recursive Descent Implementation
+
+Each grammar rule maps to a parsing function:
+
+[source,c]
+----
+ASTNode* parse_document(Parser* p) {
+    ASTNode* doc = create_node(NODE_DOCUMENT);
+    
+    if (is_document_header(p)) {
+        doc->header = parse_header(p);
+    }
+    
+    doc->body = parse_body(p);
+    return doc;
+}
+
+ASTNode* parse_body(Parser* p) {
+    ASTNode* body = create_node(NODE_BODY);
+    
+    while (!at_eof(p)) {
+        skip_blank_lines(p);
+        if (at_eof(p)) break;
+        
+        ASTNode* block = parse_block(p); // <1>
+        append_child(body, block);
+    }
+    
+    return body;
+}
+
+ASTNode* parse_block(Parser* p) {
+    Token tok = peek_token(p);
+    
+    switch (tok.type) {
+        case TOK_SECTION_MARKER:
+            return parse_section(p); // <2>
+        case TOK_DELIMITER:
+            return parse_delimited_block(p);
+        case TOK_LIST_MARKER:
+            return parse_list(p);
+        case TOK_TABLE_DELIMITER:
+            return parse_table(p);
+        default:
+            return parse_paragraph(p);
+    }
+}
+----
+<1> Recursive call for nested blocks
+<2> Sections can contain other blocks recursively
+
+WARNING: Be careful with deeply nested structures - use iterative approaches where possible to avoid stack overflow.
+
+=== Handling Lists
+
+List parsing demonstrates the recursive nature:
+
+[source,c]
+----
+ASTNode* parse_list(Parser* p) {
+    ListType type = detect_list_type(p);
+    ASTNode* list = create_list_node(type);
+    int base_level = get_marker_level(peek_token(p));
+    
+    while (is_list_item(p, base_level)) {
+        ASTNode* item = parse_list_item(p);
+        
+        // Handle nested lists
+        if (is_list_item(p, base_level + 1)) {
+            ASTNode* nested = parse_list(p); // <1>
+            append_child(item, nested);
+        }
+        
+        // Handle list continuation
+        if (match(p, TOK_CONTINUATION)) {
+            ASTNode* attached = parse_block(p);
+            append_child(item, attached);
+        }
+        
+        append_child(list, item);
+    }
+    
+    return list;
+}
+----
+<1> Recursive call for nested lists
+
+== Table Parsing
+
+Tables are one of the most complex structures:
+
+=== Basic Table Structure
+
+[source]
+----
+[cols="2,1,3"]
+|===
+|Header 1 |Header 2 |Header 3
+
+|Cell 1,1 |Cell 1,2 |Cell 1,3
+|Cell 2,1 |Cell 2,2 |Cell 2,3
+|===
+----
+
+=== Cell Spanning Example
+
+[cols="1,2,2"]
+|===
+|Normal Cell |2+|This cell spans two columns
+
+.2+|This cell spans two rows |Content |Content
+|More content |More content
+
+|Footer 1 |Footer 2 |Footer 3
+|===
+
+=== Implementation Strategy
+
+[source,c]
+----
+ASTNode* parse_table(Parser* p) {
+    expect(p, TOK_TABLE_DELIMITER);
+    
+    TableSpec spec = parse_table_attributes(p);
+    ASTNode* table = create_table_node(spec);
+    
+    while (!match(p, TOK_TABLE_DELIMITER)) {
+        ASTNode* row = create_node(NODE_TABLE_ROW);
+        
+        while (match(p, TOK_PIPE)) {
+            CellSpec cell_spec = parse_cell_spec(p);
+            ASTNode* cell = parse_table_cell(p, cell_spec);
+            append_child(row, cell);
+            
+            if (at_line_end(p)) break;
+        }
+        
+        append_child(table, row);
+        expect(p, TOK_NEWLINE);
+    }
+    
+    return table;
+}
+----
+
+== Inline Content Processing
+
+Inline content requires special attention for nested formatting:
+
+=== Formatting Combinations
+
+You can combine formatting: *_bold italic_*, **un**constrained, and `mono**spaced**bold`.
+
+Custom roles work too: [.underline]#underlined text# and [.red]#colored text#.
+
+=== Links and References
+
+Multiple link types are supported:
+
+* Auto-links: https://example.org
+* Links with text: https://example.org[Example Site]
+* Email: support@example.org
+* Cross-references: <<components,see components>>
+* Footnotes: This statement needs clarification.footnote:[Additional context here.]
+
+=== Implementation
+
+[source,c]
+----
+ASTNode* parse_inline_content(Parser* p) {
+    ASTNode* content = create_node(NODE_INLINE_CONTENT);
+    
+    while (!at_inline_boundary(p)) {
+        char c = peek_char(p);
+        
+        switch (c) {
+            case '*':
+                if (peek_char_ahead(p, 1) == '*') {
+                    append_child(content, parse_unconstrained_bold(p));
+                } else {
+                    append_child(content, parse_constrained_bold(p));
+                }
+                break;
+                
+            case '_':
+                append_child(content, parse_italic(p));
+                break;
+                
+            case '`':
+                append_child(content, parse_monospace(p));
+                break;
+                
+            case '{':
+                append_child(content, parse_attribute_ref(p));
+                break;
+                
+            case 'h':
+                if (is_url_start(p)) {
+                    append_child(content, parse_url(p));
+                } else {
+                    append_child(content, parse_text(p));
+                }
+                break;
+                
+            default:
+                append_child(content, parse_text(p));
+                break;
+        }
+    }
+    
+    return content;
+}
+----
+
+== Mathematical Expressions
+
+The parser supports both inline and block mathematical expressions.
+
+=== Inline Math
+
+The Pythagorean theorem states that stem:[a^2 + b^2 = c^2].
+
+For chemistry, water is stem:[H_2O] and glucose is stem:[C_6H_12O_6].
+
+=== Block Math
+
+[stem]
+++++
+sum_(i=1)^n i = (n(n+1))/2
+++++
+
+[stem]
+++++
+int_0^oo e^(-x^2) dx = sqrt(pi)/2
+++++
+
+=== LaTeX Support
+
+When using `:stem: latexmath`, more complex expressions are possible:
+
+[stem]
+++++
+\begin{aligned}
+\nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\
+\nabla \times \mathbf{H} &= \mathbf{J} + \frac{\partial \mathbf{D}}{\partial t}
+\end{aligned}
+++++
+
+== Preprocessor Directives
+
+=== Conditional Compilation
+
+ifdef::production[]
+.Production Build
+NOTE: This documentation is for the production release.
+endif::[]
+
+ifndef::production[]
+.Development Build
+WARNING: This is a development build with debug features enabled.
+endif::[]
+
+=== Multi-Attribute Conditions
+
+ifdef::backend-html5,backend-pdf[]
+This appears in both HTML and PDF output.
+endif::[]
+
+ifdef::advanced+enterprise[]
+== Enterprise Features
+
+This section only appears when both `advanced` and `enterprise` attributes are set.
+
+* Feature 1
+* Feature 2
+* Feature 3
+endif::[]
+
+=== Value-Based Conditions
+
+:version: 2.0
+
+ifeval::[{version} >= 2.0]
+.Version 2.0 Features
+* New parser optimization
+* Improved error messages
+* Better memory management
+endif::[]
+
+== Error Handling
+
+=== Error Types
+
+The parser should report several error categories:
+
+[qanda]
+What is a syntax error?::
+  A violation of the language grammar rules, such as mismatched delimiters or invalid token sequences.
+
+What is a semantic error?::
+  A structurally valid document with semantic problems, such as undefined cross-references or invalid attribute values.
+
+How should the parser recover?::
+  The parser should use panic-mode recovery, synchronizing on block boundaries to continue parsing after errors.
+
+=== Example Error Messages
+
+[listing]
+----
+error: line 42: Unclosed delimiter block
+   |
+42 | ----
+   | ^^^^ expected matching delimiter
+   |
+note: block opened here:
+   |
+35 | ----
+   | ^^^^ delimiter opened here
+----
+
+== Testing Strategy
+
+=== Unit Tests
+
+Test individual parsing functions:
+
+[source,c]
+----
+void test_parse_section() {
+    Parser* p = create_parser("== Test Section\n\nContent here.");
+    ASTNode* section = parse_section(p);
+    
+    assert(section->type == NODE_SECTION);
+    assert(section->level == 2);
+    assert(strcmp(section->title, "Test Section") == 0);
+    assert(section->children->count == 1); // One paragraph
+    
+    free_parser(p);
+}
+----
+
+=== Integration Tests
+
+Test complete documents:
+
+* Simple articles
+* Complex multi-section documents
+* Documents with all feature types
+* Edge cases and error conditions
+
+=== Performance Tests
+
+Measure parsing performance:
+
+[cols="<,>,>",options="header"]
+|===
+|Document Type |Size (KB) |Parse Time (ms)
+
+|Simple article
+|5
+|2.3
+
+|Technical manual
+|150
+|45.1
+
+|API reference
+|500
+|152.8
+
+|Complete specification
+|2000
+|615.2
+|===
+
+== Code Quality
+
+Use menu:Tools[Static Analysis > Run All] to check code quality.
+
+Required tools:
+
+* `clang-tidy` for static analysis
+* `valgrind` for memory checking
+* `gdb` for debugging
+
+Press kbd:[F5] to build and run tests.
+
+'''
+
+== Conclusion
+
+This implementation guide provides a complete foundation for building a LeanDoc parser. The key principles are:
+
+. Use recursive descent for simplicity
+. Handle errors gracefully
+. Test thoroughly
+. Optimize only when necessary
+
+++++
+<div class="custom-callout">
+<strong>Success!</strong> You now have everything needed to implement a production-quality parser.
+</div>
+++++
+
+<<<
+
+[glossary]
+== Glossary
+
+AST:: Abstract Syntax Tree - a tree representation of the syntactic structure of source code.
+
+DFA:: Deterministic Finite Automaton - a finite state machine where each state has exactly one transition per input symbol.
+
+LL(k):: Left-to-right, Leftmost derivation parser with k tokens of lookahead.
+
+Recursive Descent:: A top-down parsing technique where each non-terminal is implemented as a function.
+
+[bibliography]
+== Bibliography
+
+* [[[dragon]]] Aho, Alfred V., et al. _Compilers: Principles, Techniques, and Tools_. 2nd ed., Pearson, 2006.
+* [[[modern]]] Grune, Dick, and Ceriel J.H. Jacobs. _Parsing Techniques: A Practical Guide_. 2nd ed., Springer, 2008.
+* [[[semdoc]]] LeanDoc Language Specification. Version 1.0, 2026.
+
+[index]
+== Index
+
+// Index automatically generated from indexterm entries

@@ -1,0 +1,142 @@
+= Getting Started with Recursive Descent Parsing
+John Smith <john@example.org>
+v1.0, 2026-01-09
+:toc:
+:numbered:
+
+[.lead]
+This article introduces the fundamentals of recursive descent parsing for compiler construction.
+
+== Introduction
+
+Recursive descent parsing is one of the most intuitive parsing techniques. It works well for *LL(k) grammars* and can be implemented without parser generator tools.
+
+The key advantages are:
+
+* Easy to understand and implement
+* Direct correspondence between grammar rules and functions
+* Good error reporting capabilities
+* No external dependencies
+
+== Basic Concepts
+
+A recursive descent parser consists of a set of _mutually recursive functions_, one for each non-terminal in the grammar.
+
+=== The Lexer
+
+Before parsing, we need a lexer (also called scanner or tokenizer) to break the input into tokens:
+
+[source,c]
+----
+typedef enum {
+    TOK_IDENTIFIER,
+    TOK_NUMBER,
+    TOK_PLUS,
+    TOK_MINUS,
+    TOK_EOF
+} TokenType;
+
+typedef struct {
+    TokenType type;
+    char* text;
+    int line;
+} Token;
+----
+
+=== The Parser
+
+Each grammar rule becomes a function. For example, if we have this grammar rule:
+
+....
+Expression = Term ((PLUS | MINUS) Term)*
+....
+
+We implement it as:
+
+[source,c]
+----
+ASTNode* parse_expression() {
+    ASTNode* left = parse_term();
+    
+    while (current_token.type == TOK_PLUS || 
+           current_token.type == TOK_MINUS) {
+        TokenType op = current_token.type;
+        advance();
+        ASTNode* right = parse_term();
+        left = create_binary_node(op, left, right);
+    }
+    
+    return left;
+}
+----
+
+NOTE: This implementation handles left-associative operators naturally through the while loop.
+
+== Advanced Topics
+
+=== Error Recovery
+
+When a parsing error occurs, the parser should:
+
+. Report the error with line number and context
+. Attempt to recover and continue parsing
+. Synchronize on statement boundaries
+
+IMPORTANT: Good error recovery is essential for a production-quality parser.
+
+=== Handling Precedence
+
+Operator precedence is encoded in the grammar structure:
+
+[listing]
+----
+Expression  = Term ((PLUS | MINUS) Term)*
+Term        = Factor ((STAR | SLASH) Factor)*
+Factor      = NUMBER | LPAREN Expression RPAREN
+----
+
+Higher precedence operators appear lower in the grammar hierarchy.
+
+== Example Implementation
+
+Here's a complete example parsing simple arithmetic:
+
+[source,c]
+----
+include::examples/parser.c[tag=main]
+----
+
+== Conclusion
+
+Recursive descent parsing provides a straightforward approach to building parsers. While it has limitations (left recursion, limited lookahead), it remains an excellent choice for many practical applications.
+
+For more information, see <<resources>>.
+
+'''
+
+[[resources]]
+== Resources
+
+[bibliography]
+=== References
+
+* [[[dragon]]] Aho, Sethi, Ullman. _Compilers: Principles, Techniques, and Tools_. Addison-Wesley, 1986.
+* [[[crafting]]] Louden, Kenneth. _Compiler Construction: Principles and Practice_. PWS Publishing, 1997.
+
+[appendix]
+== Grammar Reference
+
+The complete grammar for our example language:
+
+|===
+|Non-terminal |Production Rule
+
+|Expression
+|Term ((PLUS \| MINUS) Term)*
+
+|Term
+|Factor ((STAR \| SLASH) Factor)*
+
+|Factor
+|NUMBER \| LPAREN Expression RPAREN
+|===

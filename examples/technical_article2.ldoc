@@ -1,0 +1,464 @@
+= Building a Simple Expression Evaluator
+Jane Developer <jane@devs.org>
+:source-highlighter: pygments
+:icons: font
+
+Learn to build a calculator that evaluates mathematical expressions.
+
+== Prerequisites
+
+Before starting, you should:
+
+* [x] Know basic C programming
+* [x] Understand recursion
+* [ ] Have experience with compilers (helpful but not required)
+
+You'll need:
+
+. A C compiler (GCC or Clang)
+. A text editor
+. Basic understanding of:
+.. Grammar notation
+.. Tree structures
+.. Recursive algorithms
+
+== Project Setup
+
+=== Directory Structure
+
+Create this structure:
+
+[listing]
+----
+calculator/
+├── src/
+│   ├── lexer.c
+│   ├── parser.c
+│   ├── eval.c
+│   └── main.c
+├── include/
+│   ├── lexer.h
+│   ├── parser.h
+│   └── eval.h
+├── tests/
+│   └── test_parser.c
+└── Makefile
+----
+
+=== Build Configuration
+
+.Makefile
+[source,makefile]
+----
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c11 -Iinclude
+SRC = src/lexer.c src/parser.c src/eval.c src/main.c
+OBJ = $(SRC:.c=.o)
+TARGET = calculator
+
+all: $(TARGET)
+
+$(TARGET): $(OBJ)
+	$(CC) $(CFLAGS) -o $@ $^
+
+clean:
+	rm -f $(OBJ) $(TARGET)
+
+test: $(TARGET)
+	./run_tests.sh
+----
+
+== The Grammar
+
+Our calculator supports:
+
+Addition:: `2 + 3`
+Subtraction:: `5 - 2`
+Multiplication:: `4 * 3`
+Division:: `8 / 2`
+Parentheses:: `(2 + 3) * 4`
+
+The grammar is:
+
+[source,ebnf]
+----
+Expression = Term (('+' | '-') Term)*
+Term       = Factor (('*' | '/') Factor)*
+Factor     = Number | '(' Expression ')'
+Number     = Digit+
+----
+
+== Implementation
+
+=== Step 1: The Lexer
+
+[source,c]
+----
+#include "lexer.h"
+#include <ctype.h>
+#include <stdlib.h>
+
+Lexer* create_lexer(const char* input) {
+    Lexer* lex = malloc(sizeof(Lexer));
+    lex->input = input;
+    lex->pos = 0;
+    return lex;
+}
+
+Token next_token(Lexer* lex) {
+    // Skip whitespace
+    while (isspace(lex->input[lex->pos])) {
+        lex->pos++;
+    }
+    
+    char c = lex->input[lex->pos];
+    
+    // End of input
+    if (c == '\0') {
+        return (Token){TOK_EOF, 0};
+    }
+    
+    // Numbers
+    if (isdigit(c)) {
+        int value = 0;
+        while (isdigit(lex->input[lex->pos])) {
+            value = value * 10 + (lex->input[lex->pos] - '0');
+            lex->pos++;
+        }
+        return (Token){TOK_NUMBER, value};
+    }
+    
+    // Operators and parentheses
+    lex->pos++;
+    switch (c) {
+        case '+': return (Token){TOK_PLUS, 0};
+        case '-': return (Token){TOK_MINUS, 0};
+        case '*': return (Token){TOK_STAR, 0};
+        case '/': return (Token){TOK_SLASH, 0};
+        case '(': return (Token){TOK_LPAREN, 0};
+        case ')': return (Token){TOK_RPAREN, 0};
+        default:  return (Token){TOK_ERROR, 0};
+    }
+}
+----
+
+TIP: Test the lexer independently before moving to parsing!
+
+=== Step 2: The Parser
+
+[source,c]
+----
+#include "parser.h"
+#include <stdlib.h>
+#include <stdio.h>
+
+Parser* create_parser(Lexer* lex) {
+    Parser* p = malloc(sizeof(Parser));
+    p->lexer = lex;
+    p->current = next_token(lex);
+    return p;
+}
+
+static void advance(Parser* p) {
+    p->current = next_token(p->lexer);
+}
+
+static bool match(Parser* p, TokenType type) {
+    if (p->current.type == type) {
+        advance(p);
+        return true;
+    }
+    return false;
+}
+
+// Forward declarations
+static ASTNode* parse_expression(Parser* p);
+static ASTNode* parse_term(Parser* p);
+static ASTNode* parse_factor(Parser* p);
+
+// Factor = Number | '(' Expression ')'
+static ASTNode* parse_factor(Parser* p) {
+    if (p->current.type == TOK_NUMBER) {
+        int value = p->current.value;
+        advance(p);
+        return create_number_node(value);
+    }
+    
+    if (match(p, TOK_LPAREN)) {
+        ASTNode* expr = parse_expression(p);
+        if (!match(p, TOK_RPAREN)) {
+            fprintf(stderr, "Error: Expected ')'\n");
+            exit(1);
+        }
+        return expr;
+    }
+    
+    fprintf(stderr, "Error: Unexpected token\n");
+    exit(1);
+}
+
+// Term = Factor (('*' | '/') Factor)*
+static ASTNode* parse_term(Parser* p) {
+    ASTNode* left = parse_factor(p);
+    
+    while (p->current.type == TOK_STAR || 
+           p->current.type == TOK_SLASH) {
+        TokenType op = p->current.type;
+        advance(p);
+        ASTNode* right = parse_factor(p);
+        left = create_binary_node(op, left, right);
+    }
+    
+    return left;
+}
+
+// Expression = Term (('+' | '-') Term)*
+static ASTNode* parse_expression(Parser* p) {
+    ASTNode* left = parse_term(p);
+    
+    while (p->current.type == TOK_PLUS || 
+           p->current.type == TOK_MINUS) {
+        TokenType op = p->current.type;
+        advance(p);
+        ASTNode* right = parse_term(p);
+        left = create_binary_node(op, left, right);
+    }
+    
+    return left;
+}
+
+ASTNode* parse(Parser* p) {
+    return parse_expression(p);
+}
+----
+
+=== Step 3: The Evaluator
+
+[source,c]
+----
+#include "eval.h"
+
+int evaluate(ASTNode* node) {
+    switch (node->type) {
+        case NODE_NUMBER:
+            return node->value;
+            
+        case NODE_BINARY: {
+            int left = evaluate(node->left);
+            int right = evaluate(node->right);
+            
+            switch (node->op) {
+                case TOK_PLUS:  return left + right;
+                case TOK_MINUS: return left - right;
+                case TOK_STAR:  return left * right;
+                case TOK_SLASH:
+                    if (right == 0) {
+                        fprintf(stderr, "Error: Division by zero\n");
+                        exit(1);
+                    }
+                    return left / right;
+                default:
+                    fprintf(stderr, "Error: Unknown operator\n");
+                    exit(1);
+            }
+        }
+        
+        default:
+            fprintf(stderr, "Error: Unknown node type\n");
+            exit(1);
+    }
+}
+----
+
+=== Step 4: Main Program
+
+[source,c]
+----
+#include "lexer.h"
+#include "parser.h"
+#include "eval.h"
+#include <stdio.h>
+#include <string.h>
+
+int main() {
+    char input[256];
+    
+    printf("Simple Calculator\n");
+    printf("Enter expressions (or 'quit' to exit):\n\n");
+    
+    while (1) {
+        printf("> ");
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            break;
+        }
+        
+        // Remove newline
+        input[strcspn(input, "\n")] = 0;
+        
+        if (strcmp(input, "quit") == 0) {
+            break;
+        }
+        
+        // Create lexer and parser
+        Lexer* lex = create_lexer(input);
+        Parser* parser = create_parser(lex);
+        
+        // Parse expression
+        ASTNode* ast = parse(parser);
+        
+        // Evaluate
+        int result = evaluate(ast);
+        printf("= %d\n\n", result);
+        
+        // Cleanup
+        free_ast(ast);
+        free_parser(parser);
+        free_lexer(lex);
+    }
+    
+    return 0;
+}
+----
+
+== Testing
+
+=== Manual Tests
+
+Try these expressions:
+
+[cols="<,>",options="header"]
+|===
+|Expression |Expected Result
+
+|`2 + 3`
+|5
+
+|`10 - 4`
+|6
+
+|`3 * 4`
+|12
+
+|`15 / 3`
+|5
+
+|`2 + 3 * 4`
+|14
+
+|`(2 + 3) * 4`
+|20
+
+|`10 / (2 + 3)`
+|2
+|===
+
+=== Automated Tests
+
+[source,c]
+----
+#include "test.h"
+
+void test_addition() {
+    assert_eval("2 + 3", 5);
+    assert_eval("10 + 20 + 30", 60);
+}
+
+void test_subtraction() {
+    assert_eval("10 - 3", 7);
+    assert_eval("20 - 5 - 2", 13);
+}
+
+void test_multiplication() {
+    assert_eval("3 * 4", 12);
+    assert_eval("2 * 3 * 4", 24);
+}
+
+void test_precedence() {
+    assert_eval("2 + 3 * 4", 14);
+    assert_eval("10 - 2 * 3", 4);
+}
+
+void test_parentheses() {
+    assert_eval("(2 + 3) * 4", 20);
+    assert_eval("2 * (3 + 4)", 14);
+    assert_eval("((1 + 2) * 3) + 4", 13);
+}
+
+int main() {
+    test_addition();
+    test_subtraction();
+    test_multiplication();
+    test_precedence();
+    test_parentheses();
+    
+    printf("All tests passed!\n");
+    return 0;
+}
+----
+
+== Exercises
+
+Try extending the calculator:
+
+. Add exponentiation (`^` operator)
++
+[listing]
+----
+2 ^ 3 = 8
+10 ^ 2 = 100
+----
+
+. Add unary minus
++
+[listing]
+----
+-5
+-(2 + 3)
+----
+
+. Add floating-point numbers
++
+[listing]
+----
+3.14 * 2
+1.5 + 2.5
+----
+
+. Add more functions
++
+[listing]
+----
+sqrt(16)
+abs(-5)
+max(3, 7)
+----
+
+== Troubleshooting
+
+Common issues:
+
+Wrong precedence::
+  Check that your grammar nesting is correct. Multiplication/division should be in `Term`, addition/subtraction in `Expression`.
+
+Infinite recursion::
+  Make sure each parse function consumes at least one token. Watch out for left recursion in your grammar.
+
+Segmentation fault::
+  Check for NULL pointers and ensure proper memory allocation.
+
+== Conclusion
+
+You've built a working calculator using:
+
+* Lexical analysis
+* Recursive descent parsing  
+* Tree-based evaluation
+
+The same principles apply to much larger languages!
+
+'''
+
+[quote,Donald Knuth]
+____
+Premature optimization is the root of all evil.
+____

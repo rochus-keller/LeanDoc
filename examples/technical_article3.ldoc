@@ -1,0 +1,305 @@
+= REST API Reference
+API Team <api@company.com>
+v3.1.0, 2026-01-09
+:toc: left
+:toclevels: 4
+:source-highlighter: pygments
+:icons: font
+:base-url: https://api.example.com/v3
+
+[abstract]
+Complete reference for the Example API v3.1
+
+== Authentication
+
+All API requests require authentication using Bearer tokens.
+
+=== Getting a Token
+
+[source,http]
+----
+POST {base-url}/auth/token
+Content-Type: application/json
+
+{
+  "username": "user@example.com",
+  "password": "secret123"
+}
+----
+
+Response:
+
+[source,json]
+----
+{
+  "access_token": "eyJhbGc...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+----
+
+=== Using the Token
+
+[source,http]
+----
+GET {base-url}/users/me
+Authorization: Bearer eyJhbGc...
+----
+
+== Endpoints
+
+=== Users
+
+==== Get Current User
+
+[cols="1,5"]
+|===
+|Method |`GET /users/me`
+|Auth |Required
+|Rate Limit |100/hour
+|===
+
+Example request:
+
+[source,bash]
+----
+curl -X GET {base-url}/users/me \
+  -H "Authorization: Bearer YOUR_TOKEN"
+----
+
+Response:
+
+[source,json]
+----
+{
+  "id": 12345,
+  "username": "john_doe",
+  "email": "john@example.com",
+  "created_at": "2026-01-01T00:00:00Z"
+}
+----
+
+==== Update User
+
+[cols="1,5"]
+|===
+|Method |`PATCH /users/:id`
+|Auth |Required
+|Rate Limit |50/hour
+|===
+
+Parameters:
+
+[cols="2,1,1,4",options="header"]
+|===
+|Field |Type |Required |Description
+
+|username
+|string
+|No
+|New username (3-20 chars)
+
+|email
+|string
+|No
+|New email address
+
+|bio
+|string
+|No
+|User biography (max 500 chars)
+|===
+
+Example:
+
+[source,bash]
+----
+curl -X PATCH {base-url}/users/12345 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "jane_doe",
+    "bio": "Software developer"
+  }'
+----
+
+=== Posts
+
+==== List Posts
+
+[cols="1,5"]
+|===
+|Method |`GET /posts`
+|Auth |Optional
+|Rate Limit |200/hour
+|===
+
+Query parameters:
+
+page:: Page number (default: 1)
+limit:: Items per page (default: 20, max: 100)
+sort:: Sort order (`created`, `updated`, default: `created`)
+order:: Sort direction (`asc`, `desc`, default: `desc`)
+
+Example:
+
+[source,bash]
+----
+curl "{base-url}/posts?page=1&limit=10&sort=created"
+----
+
+==== Create Post
+
+[cols="1,5"]
+|===
+|Method |`POST /posts`
+|Auth |Required
+|Rate Limit |10/hour
+|===
+
+Body:
+
+[source,json]
+----
+{
+  "title": "My First Post",
+  "content": "Hello, world!",
+  "tags": ["intro", "test"],
+  "published": true
+}
+----
+
+== Error Codes
+
+[cols="1,2,4",options="header"]
+|===
+|Code |Name |Description
+
+|400
+|Bad Request
+|Invalid request parameters
+
+|401
+|Unauthorized
+|Missing or invalid authentication
+
+|403
+|Forbidden
+|Insufficient permissions
+
+|404
+|Not Found
+|Resource does not exist
+
+|429
+|Too Many Requests
+|Rate limit exceeded
+
+|500
+|Internal Server Error
+|Server error occurred
+|===
+
+Error response format:
+
+[source,json]
+----
+{
+  "error": {
+    "code": 400,
+    "message": "Invalid request",
+    "details": [
+      {
+        "field": "email",
+        "issue": "Invalid email format"
+      }
+    ]
+  }
+}
+----
+
+== Rate Limiting
+
+API requests are rate-limited per user:
+
+[cols="2,1,3",options="header"]
+|===
+|Endpoint Category |Limit |Window
+
+|Read operations
+|200
+|1 hour
+
+|Write operations
+|50
+|1 hour
+
+|Authentication
+|10
+|1 hour
+|===
+
+Response headers:
+
+[source,http]
+----
+X-RateLimit-Limit: 200
+X-RateLimit-Remaining: 187
+X-RateLimit-Reset: 1704844800
+----
+
+== Webhooks
+
+Subscribe to real-time events:
+
+[cols="2,4",options="header"]
+|===
+|Event |Description
+
+|`user.created`
+|New user registered
+
+|`post.published`
+|Post was published
+
+|`comment.added`
+|New comment on post
+|===
+
+Setup:
+
+[source,http]
+----
+POST {base-url}/webhooks
+Content-Type: application/json
+
+{
+  "url": "https://your-app.com/webhook",
+  "events": ["post.published", "comment.added"],
+  "secret": "your-secret-key"
+}
+----
+
+== SDKs
+
+Official SDKs available:
+
+* JavaScript/Node.js: https://github.com/example/sdk-js
+* Python: https://github.com/example/sdk-python
+* Ruby: https://github.com/example/sdk-ruby
+* Go: https://github.com/example/sdk-go
+
+[appendix]
+== Changelog
+
+=== Version 3.1.0 (2026-01-09)
+
+* Added webhook support
+* Improved rate limiting headers
+* New user biography field
+
+=== Version 3.0.0 (2025-12-01)
+
+* Breaking: Changed authentication to Bearer tokens
+* Breaking: Removed deprecated `/v2` endpoints
+* Added pagination to all list endpoints

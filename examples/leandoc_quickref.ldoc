@@ -1,0 +1,129 @@
+= LeanDoc Quick Reference
+:toc: macro
+
+toc::[]
+
+== Text Formatting
+
+[cols="2,3,2"]
+|===
+|Feature |Syntax |Example
+
+|Bold
+|`*text*`
+|*bold*
+
+|Italic
+|`_text_`
+|_italic_
+
+|Monospace
+|`` `text` ``
+|`code`
+
+|Highlight
+|`#text#`
+|#marked#
+
+|Superscript
+|`^text^`
+|x^2^
+
+|Subscript
+|`~text~`
+|H~2~O
+|===
+
+== Blocks
+
+Listing::
++
+----
+----
+code here
+----
+----
+
+Quote::
++
+----
+____
+quoted text
+____
+----
+
+Sidebar::
++
+----
+****
+sidebar content
+****
+----
+
+== Lists
+
+Unordered::
++
+----
+* Item 1
+* Item 2
+** Nested
+----
+
+Ordered::
++
+----
+. First
+. Second
+.. Sub-item
+----
+
+Description::
++
+----
+Term:: Definition
+Another:: Explanation
+----
+
+== Links
+
+|===
+|Type |Syntax
+
+|URL
+|`https://example.org`
+
+|With text
+|`https://example.org[text]`
+
+|Cross-ref
+|`<<anchor>>`
+
+|Email
+|`user@example.org`
+|===
+
+== Images
+
+Block:: `image::file.png[]`
+Inline:: `image:file.png[]`
+
+== Tables
+
+----
+|===
+|Col 1 |Col 2
+
+|Data 1 |Data 2
+|===
+----
+
+== Admonitions
+
+----
+NOTE: Information
+
+WARNING: Be careful
+
+IMPORTANT: Must know
+----
