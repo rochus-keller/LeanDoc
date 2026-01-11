@@ -123,7 +123,7 @@ bool TypstGenerator::emitPreamble(const Node* doc, QTextStream& out, TypstGenErr
         out << "// LeanDoc -> Typst (plain)\n";
         out << "#set page(margin: 2cm)\n";
         out << "#set heading(numbering: \"1.\")\n";
-        out << "#set text(font: \"Linux Libertine\", size: 11pt)\n\n";
+        out << "#set text(font: \"FreeSans\", size: 11pt)\n\n";
         // Minimal admonition helper.
         out << "#let admon(kind, body) = block(\n"
                "  inset: (x: 10pt, y: 8pt),\n"
@@ -139,7 +139,7 @@ bool TypstGenerator::emitPreamble(const Node* doc, QTextStream& out, TypstGenErr
         out << "// LeanDoc -> Typst (report)\n";
         out << "#set page(margin: (top: 2cm, bottom: 2.2cm, x: 2.2cm))\n";
         out << "#set heading(numbering: \"1.\")\n";
-        out << "#set text(font: \"Libertinus Serif\", size: 11pt, leading: 1.25em)\n";
+        out << "#set text(font: \"FreeSerif\", size: 11pt, leading: 1.25em)\n";
         out << "#set heading(numbering: \"1.\")\n\n";
         out << "#let admon(kind, body) = block(\n"
                "  inset: (x: 12pt, y: 10pt),\n"

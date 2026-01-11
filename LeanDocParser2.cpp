@@ -324,6 +324,10 @@ Node* Parser::parseBlock()
     return parseParagraphOrLiteral(meta);
 }
 
+static inline bool isMeta(const LineTok& cur) {
+    return cur.kind == LineTok::T_BLOCK_ANCHOR || cur.kind == LineTok::T_BLOCK_ATTRS || cur.kind == LineTok::T_BLOCK_TITLE;
+}
+
 Node* Parser::parseSection(BlockMeta* m)
 {
     LineTok t = take(); // T_SECTION
@@ -345,10 +349,14 @@ Node* Parser::parseSection(BlockMeta* m)
         if (cur.kind == LineTok::T_TABLE_LINE )
             error("unexpected table line", cur.lineNo);
 
-        const LineTok& next = la(1);
-        if( (cur.kind == LineTok::T_BLOCK_ANCHOR || cur.kind == LineTok::T_BLOCK_ATTRS) &&
-                next.kind == LineTok::T_SECTION && next.level <= t.level)
-            break;
+        if( isMeta(cur) ) {
+            int pos = 1;
+            while (isMeta(la(pos)))
+                pos++;
+            const LineTok& next = la(pos);
+            if (next.kind == LineTok::T_SECTION && next.level <= t.level)
+                break;
+        }
 
         Node* b = parseBlock();
         if (!b)
