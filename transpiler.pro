@@ -11,12 +11,15 @@ TEMPLATE = app
 HEADERS += \
     LeanDocAst2.h \
     LeanDocLexer2.h \
-    LeanDocParser2.h
+    LeanDocParser2.h \
+    LeanDocTypstGen.h
 
 SOURCES += \
+    LeanDocAst2.cpp \
     LeanDocLexer2.cpp \
     LeanDocParser2.cpp \
-    dumper.cpp
+    LeanDocTypstGen.cpp \
+    leandoc2typst.cpp
 
 
 

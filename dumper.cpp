@@ -51,61 +51,6 @@ static void dumpTokens(const QString& input, QTextStream& out)
     out << eof.lineNo << ": " << eof.kindName() << "\n";
 }
 
-static void indent(QTextStream& out, int n)
-{
-    for (int i=0;i<n;i++)
-        out << "  ";
-}
-
-
-static void dumpMeta(const BlockMeta* m, QTextStream& out)
-{
-    if (!m) return;
-    if (!m->anchorId.isEmpty())
-        out << " anchorId=\"" << m->anchorId << "\"";
-    if (!m->anchorText.isEmpty())
-        out << " anchorText=\"" << m->anchorText << "\"";
-    if (!m->title.isEmpty())
-        out << " title=\"" << m->title << "\"";
-    if (!m->attrs.isEmpty())
-        out << " attrs=" << m->attrs.size();
-}
-
-static void dumpNode(const Node* n, QTextStream& out, int depth)
-{
-    if (!n)
-        return;
-    indent(out, depth);
-    out << n->nodeKindName() << " @" << n->pos.line;
-
-    dumpMeta(n->meta, out);
-
-    if (!n->name.isEmpty())
-        out << " name=\"" << n->name << "\"";
-    if (!n->target.isEmpty())
-        out << " target=\"" << n->target << "\"";
-    if (!n->text.isEmpty())
-    {
-        QString str = n->text;
-        if( str.length() > 64 )
-        {
-            str = str.simplified().left(64);
-            str = "\"" + str + "\"";
-            str += "...";
-        }else
-            str = "\"" + str + "\"";
-        out << " text=" << str;
-    }
-    if (!n->kv.isEmpty())
-        out << " kv=" << n->kv.size();
-
-    out << "\n";
-
-    for (int i=0;i<n->children.size();++i) {
-        dumpNode(n->children[i], out, depth+1);
-    }
-}
-
 static bool readFileUtf8(const QString& path, QString* outText, QString* outErr)
 {
     QFile f(path);
@@ -171,7 +116,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    dumpNode(doc, out, 0);
+    doc->dump(out);
     Node::deleteTree(doc);
     return 0;
 }

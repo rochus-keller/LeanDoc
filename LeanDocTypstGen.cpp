@@ -1,10 +1,31 @@
+/*
+* Copyright 2026 Rochus Keller <mailto:me@rochus-keller.ch>
+*
+* This file is part of the LeanDoc document language project.
+*
+* The following is the license that applies to this copy of the
+* file. For a license to use the file under conditions
+* other than those described here, please email to me@rochus-keller.ch.
+*
+* GNU General Public License Usage
+* This file may be used under the terms of the GNU General Public
+* License (GPL) versions 2.0 or 3.0 as published by the Free Software
+* Foundation and appearing in the file LICENSE.GPL included in
+* the packaging of this file. Please review the following information
+* to ensure GNU General Public Licensing requirements will be met:
+* http://www.fsf.org/licensing/licenses/info/GPLv2.html and
+* http://www.gnu.org/copyleft/gpl.html.
+*/
 #include "LeanDocTypstGen.h"
 
-namespace LeanDoc2 {
+namespace LeanDoc {
 
 static bool failAt(TypstGenError* err, const Node* n, const QString& msg)
 {
-    if (err) { err->line = n ? n->pos.line : 0; err->message = msg; }
+    if (err) {
+        err->line = n ? n->pos.line : 0;
+        err->message = msg;
+    }
     return false;
 }
 
@@ -14,11 +35,16 @@ QString TypstGenerator::escString(const QString& s)
     r.reserve(s.size() + 8);
     for (int i=0;i<s.size();++i) {
         const QChar c = s[i];
-        if (c == '\\') r += "\\\\";
-        else if (c == '\"') r += "\\\"";
-        else if (c == '\n') r += "\\n";
-        else if (c == '\r') { /* drop */ }
-        else r += c;
+        if (c == '\\')
+            r += "\\\\";
+        else if (c == '\"')
+            r += "\\\"";
+        else if (c == '\n')
+            r += "\\n";
+        else if (c == '\r')
+            { /* drop */ }
+        else
+            r += c;
     }
     return r;
 }
@@ -42,16 +68,20 @@ QString TypstGenerator::escText(const QString& s)
 
 QString TypstGenerator::labelSuffix(const BlockMeta* m)
 {
-    if (!m) return "";
-    if (m->anchorId.isEmpty()) return "";
+    if (!m)
+        return "";
+    if (m->anchorId.isEmpty())
+        return "";
     // Typst label syntax: <id>
     return " <" + m->anchorId + ">";
 }
 
 QString TypstGenerator::headingMarks(int level)
 {
-    if (level < 1) level = 1;
-    if (level > 6) level = 6;
+    if (level < 1)
+        level = 1;
+    if (level > 6)
+        level = 6;
     return QString(level, '=');
 }
 
@@ -60,7 +90,8 @@ bool TypstGenerator::generate(const Node* doc, QTextStream& out, TypstGenError* 
     if (!doc || doc->kind != Node::K_Document)
         return failAt(err, doc, "Root node is not a Document");
 
-    if (!emitPreamble(doc, out, err)) return false;
+    if (!emitPreamble(doc, out, err))
+        return false;
 
     // If doc has a title in kv, emit it as a top heading.
     const QString title = doc->kv.value("title");
@@ -69,7 +100,8 @@ bool TypstGenerator::generate(const Node* doc, QTextStream& out, TypstGenError* 
     }
 
     for (int i=0;i<doc->children.size();++i) {
-        if (!emitNode(doc->children[i], out, err, /*headingShift*/0)) return false;
+        if (!emitNode(doc->children[i], out, err, /*headingShift*/0))
+            return false;
         out << "\n";
     }
     return true;
@@ -90,6 +122,7 @@ bool TypstGenerator::emitPreamble(const Node* doc, QTextStream& out, TypstGenErr
     if (dopt.templateName == "plain") {
         out << "// LeanDoc -> Typst (plain)\n";
         out << "#set page(margin: 2cm)\n";
+        out << "#set heading(numbering: \"1.\")\n";
         out << "#set text(font: \"Linux Libertine\", size: 11pt)\n\n";
         // Minimal admonition helper.
         out << "#let admon(kind, body) = block(\n"
@@ -105,6 +138,7 @@ bool TypstGenerator::emitPreamble(const Node* doc, QTextStream& out, TypstGenErr
     if (dopt.templateName == "report") {
         out << "// LeanDoc -> Typst (report)\n";
         out << "#set page(margin: (top: 2cm, bottom: 2.2cm, x: 2.2cm))\n";
+        out << "#set heading(numbering: \"1.\")\n";
         out << "#set text(font: \"Libertinus Serif\", size: 11pt, leading: 1.25em)\n";
         out << "#set heading(numbering: \"1.\")\n\n";
         out << "#let admon(kind, body) = block(\n"
@@ -125,16 +159,27 @@ bool TypstGenerator::emitNode(const Node* n, QTextStream& out, TypstGenError* er
     if (!n) return true;
 
     switch (n->kind) {
-    case Node::K_Section: return emitSection(n, out, err, headingShift);
-    case Node::K_Paragraph: return emitParagraph(n, out, err);
-    case Node::K_LiteralParagraph: return emitLiteral(n, out, err);
-    case Node::K_AdmonitionParagraph: return emitAdmonition(n, out, err);
-    case Node::K_DelimitedBlock: return emitDelimited(n, out, err);
-    case Node::K_List: return emitList(n, out, err);
-    case Node::K_Table: return emitTable(n, out, err);
-    case Node::K_BlockMacro: return emitBlockMacro(n, out, err);
-    case Node::K_Directive: return emitDirective(n, out, err);
-    case Node::K_ThematicBreak: out << "---\n"; return true;
+    case Node::K_Section:
+        return emitSection(n, out, err, headingShift);
+    case Node::K_Paragraph:
+        return emitParagraph(n, out, err);
+    case Node::K_LiteralParagraph:
+        return emitLiteral(n, out, err);
+    case Node::K_AdmonitionParagraph:
+        return emitAdmonition(n, out, err);
+    case Node::K_DelimitedBlock:
+        return emitDelimited(n, out, err);
+    case Node::K_List:
+        return emitList(n, out, err);
+    case Node::K_Table:
+        return emitTable(n, out, err);
+    case Node::K_BlockMacro:
+        return emitBlockMacro(n, out, err);
+    case Node::K_Directive:
+        return emitDirective(n, out, err);
+    case Node::K_ThematicBreak:
+        out << "---\n";
+        return true;
     case Node::K_PageBreak:
         out << "#pagebreak()\n";
         return true;
@@ -152,11 +197,13 @@ bool TypstGenerator::emitSection(const Node* n, QTextStream& out, TypstGenError*
     Q_UNUSED(err);
     int level = n->kv.value("level").toInt();
     level += headingShift;
-    if (level < 1) level = 1;
+    if (level < 1)
+        level = 1;
 
     out << headingMarks(level) << " " << escText(n->name) << labelSuffix(n->meta) << "\n\n";
     for (int i=0;i<n->children.size();++i) {
-        if (!emitNode(n->children[i], out, err, headingShift)) return false;
+        if (!emitNode(n->children[i], out, err, headingShift))
+            return false;
         out << "\n";
     }
     return true;
@@ -164,7 +211,8 @@ bool TypstGenerator::emitSection(const Node* n, QTextStream& out, TypstGenError*
 
 bool TypstGenerator::emitParagraph(const Node* n, QTextStream& out, TypstGenError* err)
 {
-    if (!emitInlineSeq(n->children, out, err)) return false;
+    if (!emitInlineSeq(n->children, out, err))
+        return false;
     out << "\n";
     return true;
 }
@@ -180,7 +228,8 @@ bool TypstGenerator::emitLiteral(const Node* n, QTextStream& out, TypstGenError*
 bool TypstGenerator::emitAdmonition(const Node* n, QTextStream& out, TypstGenError* err)
 {
     out << "#admon(\"" << escString(n->name) << "\", [";
-    if (!emitInlineSeq(n->children, out, err)) return false;
+    if (!emitInlineSeq(n->children, out, err))
+        return false;
     out << "])\n";
     return true;
 }
@@ -193,7 +242,8 @@ bool TypstGenerator::emitDelimited(const Node* n, QTextStream& out, TypstGenErro
         // Container block: render as simple block with its content.
         out << "#block([";
         for (int i=0;i<n->children.size();++i) {
-            if (!emitNode(n->children[i], out, err, 0)) return false;
+            if (!emitNode(n->children[i], out, err, 0))
+                return false;
             out << "\n";
         }
         out << "])\n";
@@ -232,14 +282,16 @@ bool TypstGenerator::emitList(const Node* n, QTextStream& out, TypstGenError* er
         out << "#table(columns: 2,\n";
         for (int i=0;i<n->children.size();++i) {
             const Node* it = n->children[i];
-            if (!it || it->kind != Node::K_ListItem) continue;
+            if (!it || it->kind != Node::K_ListItem)
+                continue;
             // term
             out << "  [" << escText(it->name) << "], ";
             // definition: render first child (if present) or empty
             out << "[";
             if (!it->children.isEmpty()) {
                 // often a paragraph node
-                if (!emitNode(it->children[0], out, err, 0)) return false;
+                if (!emitNode(it->children[0], out, err, 0))
+                    return false;
             }
             out << "],\n";
         }
@@ -252,13 +304,16 @@ bool TypstGenerator::emitList(const Node* n, QTextStream& out, TypstGenError* er
     out << (ordered ? "#enum(" : "#list(") << "\n";
     for (int i=0;i<n->children.size();++i) {
         const Node* it = n->children[i];
-        if (!it || it->kind != Node::K_ListItem) continue;
+        if (!it || it->kind != Node::K_ListItem)
+            continue;
 
         out << "  [";
         // render all children of list item (paragraph + continuations)
         for (int k=0;k<it->children.size();++k) {
-            if (!emitNode(it->children[k], out, err, 0)) return false;
-            if (k+1 < it->children.size()) out << "\n";
+            if (!emitNode(it->children[k], out, err, 0))
+                return false;
+            if (k+1 < it->children.size())
+                out << "\n";
         }
         out << "],\n";
     }
@@ -272,16 +327,19 @@ bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* e
     int cols = 0;
     for (int i=0;i<n->children.size();++i) {
         const Node* row = n->children[i];
-        if (!row || row->kind != Node::K_TableRow) continue;
+        if (!row || row->kind != Node::K_TableRow)
+            continue;
         cols = row->children.size();
         break;
     }
-    if (cols <= 0) return true;
+    if (cols <= 0)
+        return true;
 
     out << "#table(columns: " << cols << ",\n";
     for (int i=0;i<n->children.size();++i) {
         const Node* row = n->children[i];
-        if (!row || row->kind != Node::K_TableRow) continue;
+        if (!row || row->kind != Node::K_TableRow)
+            continue;
         if (row->children.size() != cols)
             return failAt(err, row, "Table row has inconsistent number of cells");
 
@@ -289,7 +347,8 @@ bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* e
             const Node* cell = row->children[c];
             out << "  [";
             if (cell) {
-                if (!emitInlineSeq(cell->children, out, err)) return false;
+                if (!emitInlineSeq(cell->children, out, err))
+                    return false;
             }
             out << "],\n";
         }
@@ -335,7 +394,8 @@ bool TypstGenerator::emitDirective(const Node* n, QTextStream& out, TypstGenErro
 bool TypstGenerator::emitInlineSeq(const QList<Node*>& inl, QTextStream& out, TypstGenError* err)
 {
     for (int i=0;i<inl.size();++i) {
-        if (!emitInline(inl[i], out, err)) return false;
+        if (!emitInline(inl[i], out, err))
+            return false;
     }
     return true;
 }
@@ -350,14 +410,38 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
         return true;
 
     case Node::K_Emph:
-        if (n->name == "bold") { out << "*"; if (!emitInlineSeq(n->children, out, err)) return false; out << "*"; return true; }
-        if (n->name == "italic") { out << "_"; if (!emitInlineSeq(n->children, out, err)) return false; out << "_"; return true; }
-        if (n->name == "mono") {
-            if (!n->text.isEmpty()) out << "`" << escText(n->text) << "`";
-            else { out << "`"; if (!emitInlineSeq(n->children, out, err)) return false; out << "`"; }
+        if (n->name == "bold") {
+            out << "*";
+            if (!emitInlineSeq(n->children, out, err))
+                return false;
+            out << "*";
             return true;
         }
-        if (n->name == "highlight") { out << "#highlight(["; if (!emitInlineSeq(n->children, out, err)) return false; out << "])"; return true; }
+        if (n->name == "italic") {
+            out << "_";
+            if (!emitInlineSeq(n->children, out, err))
+                return false;
+            out << "_";
+            return true;
+        }
+        if (n->name == "mono") {
+            if (!n->text.isEmpty())
+                out << "`" << escText(n->text) << "`";
+            else {
+                out << "`";
+                if (!emitInlineSeq(n->children, out, err))
+                    return false;
+                out << "`";
+            }
+            return true;
+        }
+        if (n->name == "highlight") {
+            out << "#highlight([";
+            if (!emitInlineSeq(n->children, out, err))
+                return false;
+            out << "])";
+            return true;
+        }
         return failAt(err, n, "Unknown inline emphasis kind: " + n->name);
 
     case Node::K_Superscript:
@@ -375,7 +459,8 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
             out << "#link(\"" << escString(n->target) << "\")[" << escText(n->target) << "]";
         } else {
             out << "#link(\"" << escString(n->target) << "\")[";
-            if (!emitInlineSeq(n->children, out, err)) return false;
+            if (!emitInlineSeq(n->children, out, err))
+                return false;
             out << "]";
         }
         return true;
@@ -385,7 +470,8 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
             out << "@" << escText(n->target);
         } else {
             out << "#link(<" << escText(n->target) << ">)[";
-            if (!emitInlineSeq(n->children, out, err)) return false;
+            if (!emitInlineSeq(n->children, out, err))
+                return false;
             out << "]";
         }
         return true;
@@ -405,13 +491,15 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
         // Render selected macros; others require semantic phase or custom functions.
         if (n->name == "footnote") {
             out << "#footnote[";
-            if (!emitInlineSeq(n->children, out, err)) return false;
+            if (!emitInlineSeq(n->children, out, err))
+                return false;
             out << "]";
             return true;
         }
         if (n->name == "kbd" || n->name == "btn" || n->name == "menu") {
             out << "#smallcaps[";
-            if (!emitInlineSeq(n->children, out, err)) return false;
+            if (!emitInlineSeq(n->children, out, err))
+                return false;
             out << "]";
             return true;
         }

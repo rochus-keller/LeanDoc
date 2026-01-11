@@ -74,6 +74,7 @@ private:
     void expect(LineTok::Kind k, const QString& what);
     void error(const QString& msg, int row, int col = 1);
     void skipBlankAndLineComments(); // ignores T_BLANK and T_LINE_COMMENT as blocks
+    QList<Node*> readCells(const LineTok&);
 
     static QMap<QString, QString> parseAttrList(const QString& bracketed); // "[a=b,c]" or inside
     static QString stripOuter(const QString& s, QChar a, QChar b);

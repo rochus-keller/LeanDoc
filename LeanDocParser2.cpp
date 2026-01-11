@@ -80,6 +80,65 @@ void Parser::skipBlankAndLineComments()
         take();
 }
 
+static QStringList splitUnescapedPipe(const QString& line)
+{
+    QStringList parts;
+    QString cur;
+    cur.reserve(line.size());
+
+    int backslashRun = 0; // number of consecutive '\' immediately preceding current char
+
+    for (int i = 0; i < line.size(); ++i) {
+        const QChar c = line[i];
+
+        if (c == '|') {
+            if ((backslashRun % 2) == 0) {
+                // true separator
+                parts.append(cur);
+                cur.clear();
+            } else {
+                // escaped pipe: replace "\|" with "|" (remove one escape backslash)
+                if (!cur.isEmpty())
+                    cur.chop(1);
+                cur.append('|');
+            }
+            backslashRun = 0;
+            continue;
+        }
+
+        cur.append(c);
+
+        if (c == '\\')
+            backslashRun += 1;
+        else
+            backslashRun = 0;
+    }
+
+    parts.append(cur);
+    return parts;
+}
+
+QList<Node *> Parser::readCells(const LineTok & rowTok)
+{
+    // Split by '|' but keep empty prefix; cells are after each '|'
+    QStringList parts = splitUnescapedPipe(rowTok.raw);
+    QList<Node *> cells;
+    for (int i=1;i<parts.size();++i) {
+        QString cell = parts[i];
+
+        Node* c = new Node(Node::K_TableCell);
+        c->pos = SourcePos(rowTok.lineNo, 1);
+
+        // CellSpec ends with '|' in grammar; in practice AsciiDoc spec is richer.
+        // Implement a minimal subset: consume leading spec like "2.3+^a|" etc if present (best-effort).
+        QString s = cell.trimmed();
+        // For simplicity store raw cell text; advanced spec parsing can be extended.
+        c->children = parseInlineContent(s, rowTok.lineNo);
+        cells << c;
+    }
+    return cells;
+}
+
 QString Parser::stripOuter(const QString& s, QChar a, QChar b)
 {
     QString t = s.trimmed();
@@ -523,44 +582,6 @@ static QStringList splitOnUnescapedPipe0(const QString& s)
     return r;
 }
 
-static QStringList splitUnescapedPipe(const QString& line)
-{
-    QStringList parts;
-    QString cur;
-    cur.reserve(line.size());
-
-    int backslashRun = 0; // number of consecutive '\' immediately preceding current char
-
-    for (int i = 0; i < line.size(); ++i) {
-        const QChar c = line[i];
-
-        if (c == '|') {
-            if ((backslashRun % 2) == 0) {
-                // true separator
-                parts.append(cur);
-                cur.clear();
-            } else {
-                // escaped pipe: replace "\|" with "|" (remove one escape backslash)
-                if (!cur.isEmpty())
-                    cur.chop(1);
-                cur.append('|');
-            }
-            backslashRun = 0;
-            continue;
-        }
-
-        cur.append(c);
-
-        if (c == '\\')
-            backslashRun += 1;
-        else
-            backslashRun = 0;
-    }
-
-    parts.append(cur);
-    return parts;
-}
-
 Node* Parser::parseTable(BlockMeta* m)
 {
     // Table = [TableAttributes] |=== content |===
@@ -572,6 +593,7 @@ Node* Parser::parseTable(BlockMeta* m)
     t->meta = m;
 
     // Parse rows until closing |=== (same token kind)
+    QList< QList<Node*> > parts;
     while (!dlex.atEnd()) {
         if (la(0).kind == LineTok::T_TABLE_DELIM) {
             take();
@@ -586,29 +608,36 @@ Node* Parser::parseTable(BlockMeta* m)
             continue;
         }
 
-        LineTok rowTok = take();
-        QString line = rowTok.raw;
-
-        Node* row = new Node(Node::K_TableRow);
-        row->pos = SourcePos(rowTok.lineNo, 1);
-
-        // Split by '|' but keep empty prefix; cells are after each '|'
-        QStringList parts = splitUnescapedPipe(line);
-        for (int i=1;i<parts.size();++i) {
-            QString cell = parts[i];
-
-            Node* c = new Node(Node::K_TableCell);
-            c->pos = SourcePos(rowTok.lineNo, 1);
-
-            // CellSpec ends with '|' in grammar; in practice AsciiDoc spec is richer.
-            // Implement a minimal subset: consume leading spec like "2.3+^a|" etc if present (best-effort).
-            QString s = cell.trimmed();
-            // For simplicity store raw cell text; advanced spec parsing can be extended.
-            c->children = parseInlineContent(s, rowTok.lineNo);
-
-            row->add(c);
+        LineTok rowTok = take(); 
+        parts << readCells(rowTok);
+    }
+    // TODO: so far only basic table, table with header, and column spec are supported!
+    if( !parts.isEmpty() )
+    {
+        const QList<Node*>& firstRow = parts.first();
+        if( !firstRow.isEmpty() )
+        {
+            Node* row = new Node(Node::K_TableRow);
+            row->pos = firstRow.first()->pos;
+            for( int i = 0; i < firstRow.size(); i++ )
+                row->add(firstRow[i]);
+            t->add(row);
+            QList<Node*> cells;
+            for( int i = 1; i < parts.size(); i++ )
+                cells += parts[i];
+            if( cells.size() % firstRow.size() != 0 )
+                error("the number of cells is not compatible with the table size", firstRow.first()->pos.line, firstRow.first()->pos.column);
+            const int rows = cells.size() / firstRow.size();
+            int off = 0;
+            for( int r = 0; r < rows; r++ )
+            {
+                row = new Node(Node::K_TableRow);
+                row->pos = cells[off]->pos;
+                for( int i = 0; i < firstRow.size(); i++ )
+                    row->add(cells[off++]);
+                t->add(row);
+            }
         }
-        t->add(row);
     }
 
     return t;

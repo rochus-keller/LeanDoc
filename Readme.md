@@ -47,14 +47,19 @@ LeanDoc emphasizes a single bracket-based metadata style (attributes/IDs/roles/o
 - [x] Derive a new language from AsciiDoc with a similar syntax, but parseable and with no ambiguity
 - [x] Lexer, parser, AST 
 - [ ] Semantic validator, processing includes and conditional compilation
-- [ ] Typst generator
+- [x] Typst generator (WIP)
 - [ ] Integration with Typos engine
 
-### Status on January 19, 2026
+### Status on January 10, 2026
 
 A decently complete version of the specification is available, as well as a working parser which is able to parse the example files. Debugging and corrections
 are work-in-progress though.
 
+### Status on January 11, 2026
+
+A first version of the Typst generator is working and able to generate files which compile with Typst 0.14.2 and the resulting PDFs look decently.
+The following examples work: simple_article, technical_article2, technical_article3.
+I need a processor for ifdef to process technical_article1.
 
 ### Additional Credits
 
