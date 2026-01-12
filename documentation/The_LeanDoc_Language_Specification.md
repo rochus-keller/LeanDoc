@@ -22,7 +22,9 @@
 
 ## 1. Introduction
 
-LeanDoc is a semantic document markup language designed to cover the complete feature set of AsciiDoc while being parsable by a single recursive descent parser. The language prioritizes minimal boilerplate syntax, uniform constructs, and ease of learning for the most commonly used features.
+LeanDoc is a semantic document markup language designed to cover the cover the essential subset of of AsciiDoc while being parsable by a single recursive descent parser. The language prioritizes minimal boilerplate syntax, uniform constructs, and ease of learning for the most commonly used features.
+
+Each LeanDoc document is a valid AsciiDoc document (but not vice versa).
 
 This specification serves as both a reference for language users and a blueprint for parser implementers.
 
@@ -49,7 +51,7 @@ Block delimiters use context-sensitive markers that change meaning based on posi
 All metadata (IDs, roles, options) use a single bracket notation `[...]` with consistent parsing rules across block and inline contexts.
 
 ### Principle 4: Explicit Over Implicit
-Where AsciiDoc infers context (e.g., distinguishing quote blocks from verse blocks), LeanDoc uses explicit markers or attributes, reducing parser complexity.
+Where AsciiDoc infers context (e.g., distinguishing quote blocks from other blocks), LeanDoc uses explicit markers or attributes, reducing parser complexity.
 
 ### Principle 5: Frequency-Weighted Syntax
 Most common features (paragraphs, basic formatting, lists, links) require minimal syntax. Less common features (conditional compilation, complex tables) accept higher syntax overhead.
@@ -166,7 +168,6 @@ Block = [ BlockMetadata ]
         | BlockMacro 
         | Directive
         | ThematicBreak 
-        | PageBreak
         | Comment ) ;
 
 BlockMetadata = [ BlockAnchor ] 
@@ -310,9 +311,12 @@ Table = [ TableAttributes ] TableDelimiterOpen TableContent TableDelimiterClose 
 
 TableAttributes = LINE_START "[" TableAttributeList "]" LINE_END ;
 
-TableAttributeList = [ "cols" "=" STRING_LITERAL ] 
-                     { "," WHITESPACE* AttributeEntry } ;
+TableAttributeList = TableAttributeEntry { "," WHITESPACE* TableAttributeEntry } ;
 
+TableAttributeEntry = ( "cols" "=" STRING_LITERAL )
+                    | ( "options" "=" STRING_LITERAL ) 
+                    | ( "title" "=" STRING_LITERAL ) ;
+               
 TableDelimiterOpen = LINE_START PIPE EQUALS{3} LINE_END ;
 
 TableDelimiterClose = LINE_START PIPE EQUALS{3} LINE_END ;
@@ -321,14 +325,13 @@ TableContent = ( TableRow | BLANK_LINE )* ;
 
 TableRow = LINE_START (PIPE TableCell)+ LINE_END ;
 
-TableCell = [ CellSpec ] InlineContent ;
+TableCell = [ CellSpec PIPE ] InlineContent ;
 
-CellSpec = [ ColSpan ] [ RowSpan ] [ Alignment ] [ Style ] ;
+CellSpec = [ ColSpan "+" ] [ Alignment ] ;
 
 ColSpan = DIGIT+ ;
-RowSpan = DOT DIGIT+ ;
+
 Alignment = "<" | "^" | ">" ;
-Style = "a" | "e" | "h" | "l" | "m" | "s" | "v" ;
 ```
 
 ### 4.8 Inline Elements
@@ -400,7 +403,7 @@ InlineMacro = MacroName COLON "[" [ MacroAttributes ] "]"
             | MacroName COLON MacroTarget "[" [ MacroAttributes ] "]" ;
 
 MacroName = "kbd" | "btn" | "menu" | "pass" | "footnote" 
-          | "indexterm" | "indexterm2" | "stem" | IDENTIFIER ;
+          | "stem" | IDENTIFIER ;
 
 MacroTarget = ( ANY_CHAR - ( "[" | "]" ) )+ ;
 MacroAttributes = InlineContent { "," WHITESPACE* InlineContent } ;
@@ -419,21 +422,8 @@ LineBreak = WHITESPACE PLUS LINE_END ;
 ### 4.9 Block Macros
 
 ```ebnf
-BlockMacro = ImageBlockMacro 
-           | VideoBlockMacro 
-           | AudioBlockMacro 
-           | IncludeMacro 
+BlockMacro = IncludeMacro 
            | CustomBlockMacro ;
-
-ImageBlockMacro = LINE_START "image::" ImagePath "[" [ ImageAttributes ] "]" LINE_END ;
-
-VideoBlockMacro = LINE_START "video::" VideoPath "[" [ VideoAttributes ] "]" LINE_END ;
-VideoPath = ( ANY_CHAR - ( "[" | "]" ) )+ ;
-VideoAttributes = AttributeEntry { "," WHITESPACE* AttributeEntry } ;
-
-AudioBlockMacro = LINE_START "audio::" AudioPath "[" [ AudioAttributes ] "]" LINE_END ;
-AudioPath = ( ANY_CHAR - ( "[" | "]" ) )+ ;
-AudioAttributes = AttributeEntry { "," WHITESPACE* AttributeEntry } ;
 
 IncludeMacro = LINE_START "include::" IncludePath "[" [ IncludeAttributes ] "]" LINE_END ;
 IncludePath = ( ANY_CHAR - ( "[" | "]" ) )+ ;
@@ -447,7 +437,7 @@ CustomBlockMacro = LINE_START IDENTIFIER "::" MacroTarget "[" [ MacroAttributes 
 ```ebnf
 Directive = ConditionalDirective | IncludeDirective ;
 
-ConditionalDirective = IfdefDirective | IfndefDirective | IfevalDirective ;
+ConditionalDirective = IfdefDirective | IfndefDirective ;
 
 IfdefDirective = LINE_START "ifdef::" AttributeCondition "[" [ InlineContent ] "]" LINE_END
                  [ DocumentBody ]
@@ -457,16 +447,8 @@ IfndefDirective = LINE_START "ifndef::" AttributeCondition "[" [ InlineContent ]
                   [ DocumentBody ]
                   LINE_START "endif::" [ AttributeCondition ] "[" "]" LINE_END ;
 
-IfevalDirective = LINE_START "ifeval::" "[" Expression "]" LINE_END
-                  [ DocumentBody ]
-                  LINE_START "endif::" "[" "]" LINE_END ;
+AttributeCondition = IDENTIFIER { "," IDENTIFIER } ;
 
-AttributeCondition = IDENTIFIER { ( "+" | "," ) IDENTIFIER } ;
-
-Expression = "{" IDENTIFIER "}" Operator Value ;
-Operator = "==" | "!=" | "<" | ">" | "<=" | ">=" ;
-Value = STRING_LITERAL | NUMBER ;
-NUMBER = DIGIT+ [ "." DIGIT+ ] ;
 ```
 
 ### 4.11 Comments and Breaks
@@ -480,8 +462,6 @@ ThematicBreak = LINE_START "'''" LINE_END
               | LINE_START DASH{3} LINE_END
               | LINE_START STAR{3} LINE_END ;
 
-PageBreak = LINE_START "<<<" [ PageBreakAttributes ] LINE_END ;
-PageBreakAttributes = WHITESPACE+ "[" AttributeList "]" ;
 ```
 
 ### 4.12 Special Sections
@@ -631,7 +611,7 @@ This is a second paragraph.
 ```
 
 #### 5.2.3 Hard Line Breaks
-**Syntax:** Space + `+` at line end, or `[%hardbreaks]` attribute
+**Syntax:** Space + `+` at line end
 
 **Description:** Forces line break in output without starting new paragraph.
 
@@ -642,11 +622,6 @@ This is a second paragraph.
 First line +
 Second line +
 Third line
-
-[%hardbreaks]
-These lines
-will also break
-at each newline.
 ```
 
 #### 5.2.4 Lead Paragraph
@@ -841,21 +816,8 @@ Compiler::
 ```
 
 #### 5.4.5 Question and Answer Lists
-**Syntax:** `[qanda]` attribute followed by description list
 
-**Description:** Specialized description list formatted as Q&A.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-[qanda]
-What is parsing?::
-  The process of analyzing a string of symbols.
-
-Why use recursive descent?::
-  It's simple and efficient for LL(k) grammars.
-```
+Not supported. Use plain description lists or titles instead.
 
 #### 5.4.6 List Continuation
 **Syntax:** `+` on line by itself between list item and attached block
@@ -993,20 +955,7 @@ This open block is styled as source code.
 ```
 
 #### 5.5.8 Passthrough Block
-**Syntax:** `++++` delimiters
-
-**Description:** Content passed directly to output without processing (e.g., raw HTML).
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-++++
-<div class="custom">
-  Raw HTML content here
-</div>
-++++
-```
+This feature is not supported. For math. formulae, use latexmath: instead.
 
 #### 5.5.9 Admonition Blocks
 **Syntax:** `[NOTE]`, `[TIP]`, etc. attribute before block
@@ -1049,7 +998,7 @@ This is a complex admonition with:
 ```
 
 #### 5.6.2 Table with Header
-**Syntax:** First row promoted to header when followed by blank line, or `[%header]` attribute
+**Syntax:** First row promoted to header when followed by blank line, or `[options="header"]` attribute
 
 **Description:** Tables with distinguished header row.
 
@@ -1057,7 +1006,7 @@ This is a complex admonition with:
 
 **Example:**
 ```
-[%header]
+[options="header"]
 |===
 |Name |Age |City
 
@@ -1091,7 +1040,7 @@ This is a complex admonition with:
 ```
 
 #### 5.6.4 Cell Spanning
-**Syntax:** `2+|` (column span), `.2+|` (row span), `2.3+|` (both)
+**Syntax:** `2+|` (column span)
 
 **Description:** Cells that span multiple rows or columns.
 
@@ -1108,7 +1057,7 @@ This is a complex admonition with:
 ```
 
 #### 5.6.5 Cell Alignment and Styling
-**Syntax:** `<|` (left), `^|` (center), `>|` (right), `a|` (AsciiDoc), `l|` (literal), etc.
+**Syntax:** `<|` (left), `^|` (center), `>|` (right)
 
 **Description:** Control cell content alignment and processing.
 
@@ -1120,30 +1069,11 @@ This is a complex admonition with:
 |<| Left aligned
 |^| Center aligned
 |>| Right aligned
-|a|
-This cell contains *AsciiDoc* content:
-
-* List item
-* Another item
 |===
 ```
 
 #### 5.6.6 CSV Tables
-**Syntax:** `[format=csv]` attribute
-
-**Description:** Import or write tables in CSV format.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-[format=csv]
-|===
-Name,Age,City
-Alice,30,New York
-Bob,25,Boston
-|===
-```
+Not supported.
 
 ---
 
@@ -1200,7 +1130,7 @@ mailto:sales@example.org[Contact Sales]
 ```
 
 #### 5.7.5 Internal Anchors
-**Syntax:** `[[anchorid]]` or `[#anchorid]` or `anchor:anchorid[]`
+**Syntax:** `[[anchorid]]` or `[#anchorid]`
 
 **Description:** Define targets for cross-references within document.
 
@@ -1212,8 +1142,6 @@ mailto:sales@example.org[Contact Sales]
 == Important Section
 
 Text with [#inline-anchor]#inline anchor#.
-
-anchor:another-anchor[]More text here.
 ```
 
 #### 5.7.6 Cross-References
@@ -1248,19 +1176,7 @@ Refer to xref:appendix.adoc[the appendix].
 ### 5.8 Image, Audio, and Video Features
 
 #### 5.8.1 Block Image
-**Syntax:** `image::filename.jpg[]`
-
-**Description:** Standalone image as block-level element.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-image::diagram.png[]
-
-.Figure 1: System Architecture
-image::architecture.svg[System Architecture,800,600]
-```
+No longer supported. Instead use a paragraph which only contains one inline image. 
 
 #### 5.8.2 Inline Image
 **Syntax:** `image:filename.jpg[]`
@@ -1272,10 +1188,12 @@ image::architecture.svg[System Architecture,800,600]
 **Example:**
 ```
 Click the image:button.png[] button to continue.
+
+image:file.jpg[alt text,width,height,opts]
 ```
 
 #### 5.8.3 Image Attributes
-**Syntax:** `image::file.jpg[alt text,width,height,opts]`
+**Syntax:** `image:file.jpg[alt text,width,height,opts]`
 
 **Description:** Control image display with alt text, dimensions, alignment, etc.
 
@@ -1283,48 +1201,19 @@ Click the image:button.png[] button to continue.
 
 **Example:**
 ```
-image::photo.jpg[A beautiful sunset,400,300,align=center]
-image::logo.png[Company Logo,link=https://example.com]
+image:photo.jpg[A beautiful sunset,400,300,align=center]
+image:logo.png[Company Logo,link=https://example.com]
 ```
 
 #### 5.8.4 Audio
-**Syntax:** `audio::filename.mp3[]`
-
-**Description:** Embedded audio player.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-audio::podcast.mp3[]
-audio::music.wav[options=autoplay]
-```
+Not supported.
 
 #### 5.8.5 Video
-**Syntax:** `video::filename.mp4[]`
+Not supported.
 
-**Description:** Embedded video player.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-video::demo.mp4[]
-video::tutorial.webm[width=640,height=480,options=autoplay]
-```
 
 #### 5.8.6 YouTube/Vimeo Embedding
-**Syntax:** `video::video-id[youtube]` or `video::video-id[vimeo]`
-
-**Description:** Embed videos from hosting platforms.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-video::dQw4w9WgXcQ[youtube]
-video::123456789[vimeo]
-```
+Not supported.
 
 ---
 
@@ -1377,49 +1266,13 @@ include::code.py[lines=10..20;30..40]
 ```
 
 #### 5.9.4 Keyboard Macro
-**Syntax:** `kbd:[Key]` (requires `:experimental:` attribute)
-
-**Description:** Render keyboard shortcuts.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-:experimental:
-
-Press kbd:[Ctrl+C] to copy.
-Use kbd:[Ctrl+Alt+Del] to restart.
-```
+Not supported.
 
 #### 5.9.5 Button Macro
-**Syntax:** `btn:[Button Text]` (requires `:experimental:` attribute)
-
-**Description:** Render UI button references.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-:experimental:
-
-Click btn:[OK] to continue.
-Press the btn:[Submit] button.
-```
+Not supported.
 
 #### 5.9.6 Menu Macro
-**Syntax:** `menu:Menu[Submenu > Item]` (requires `:experimental:` attribute)
-
-**Description:** Render menu navigation paths.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-:experimental:
-
-Select menu:File[Save As].
-Go to menu:Edit[Preferences > Editor > Font].
-```
+Not supported.
 
 #### 5.9.7 Footnote Macro
 **Syntax:** `footnote:[text]` or `footnote:id[text]` for reuse
@@ -1437,15 +1290,14 @@ Second reference.footnote:disclaimer[]
 ```
 
 #### 5.9.8 Index Term Macros
-**Syntax:** `indexterm:[term]`, `indexterm2:[term]`, `((term))`, `(((term)))`
+**Syntax:** `((term))`, `(((term)))`
 
 **Description:** Mark terms for index generation.
 
-**AsciiDoc Equivalent:** Identical syntax (indexterm2 deprecated but supported).
+**AsciiDoc Equivalent:** only `((term))`, `(((term)))` supported.
 
 **Example:**
 ```
-The indexterm:[compiler] translates source code.
 The ((parser)) analyzes syntax.
 Use (((recursive descent))) parsing for LL(k) grammars.
 ```
@@ -1455,79 +1307,35 @@ Use (((recursive descent))) parsing for LL(k) grammars.
 ### 5.10 Mathematical Content Features
 
 #### 5.10.1 Inline STEM
-**Syntax:** `stem:[expression]` (requires `:stem:` attribute)
+Not supported. Use latexmath: instead.
 
-**Description:** Inline mathematical expressions using AsciiMath or LaTeX.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-:stem:
-
-The formula stem:[a^2 + b^2 = c^2] is the Pythagorean theorem.
-Water is stem:[H_2O].
-```
 
 #### 5.10.2 Block STEM
-**Syntax:** `[stem]` attribute followed by `++++` delimiters
-
-**Description:** Display-mode mathematical expressions.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-:stem:
-
-[stem]
-++++
-sum_(i=1)^n i = (n(n+1))/2
-++++
-```
+Not supported. Use a paragraph with latexmath: instead.
 
 #### 5.10.3 LaTeX Math Notation
-**Syntax:** `:stem: latexmath` attribute, then `latexmath:[...]` or `[stem]` blocks
+**Syntax:** `latexmath:[...]` for both inline an block math
 
-**Description:** Use LaTeX/TeX notation for math instead of AsciiMath.
+**Description:** Use LaTeX/TeX notation for math.
 
 **AsciiDoc Equivalent:** Identical syntax.
 
 **Example:**
 ```
-:stem: latexmath
+latexmath:[\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}]
 
-Inline: latexmath:[\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}]
-
-[stem]
-++++
-\begin{equation}
-E = mc^2
-\end{equation}
-++++
 ```
 
 #### 5.10.4 Equation Numbering
-**Syntax:** `:eqnums:` attribute for automatic numbering
-
-**Description:** Automatically number equations in LaTeX blocks.
-
-**AsciiDoc Equivalent:** Identical syntax.
+This feature is no longer necessary, since formula blocks are automatically detected and referencable
+with the normal means.
 
 **Example:**
 ```
-:stem: latexmath
-:eqnums:
+[#pythagorean]
+latexmath:[a^2 + b^2 = c^2]
 
-[stem]
-++++
-\begin{equation}
-\label{pythagorean}
-a^2 + b^2 = c^2
-\end{equation}
-++++
-
-Reference: stem:[\eqref{pythagorean}]
+As seen in <<pythagorean>>...
 ```
 
 ---
@@ -1565,7 +1373,9 @@ endif::[]
 ```
 
 #### 5.11.3 Multiple Attribute Conditions
-**Syntax:** `ifdef::attr1,attr2[]` (OR), `ifdef::attr1+attr2[]` (AND)
+**Syntax:** `ifdef::attr1,attr2[]` (OR)
+
+Note that AND is not directly supported, but can be achieved by a series of ifdef directives (see example below).
 
 **Description:** Test multiple attributes in single condition.
 
@@ -1577,33 +1387,12 @@ ifdef::backend-html5,backend-pdf[]
 This appears in HTML or PDF output.
 endif::[]
 
-ifdef::production+release[]
-This requires both production and release to be set.
+ifdef::attribute-a[]
+ifdef::attribute-b[]
+Content for A and B
+endif::[]
 endif::[]
 ```
-
-#### 5.11.4 Ifeval Directive
-**Syntax:** `ifeval::[{attr} == value]...endif::[]`
-
-**Description:** Conditional based on attribute value comparison.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-:version: 2.0
-
-ifeval::[{version} >= 2.0]
-This feature is available in version 2.0 and later.
-endif::[]
-
-ifeval::["{backend}" == "html5"]
-HTML-specific content here.
-endif::[]
-```
-
----
-
 ### 5.12 Comment Features
 
 #### 5.12.1 Line Comments
@@ -1657,20 +1446,7 @@ Second section content.
 ```
 
 #### 5.13.2 Page Break
-**Syntax:** `<<<`
-
-**Description:** Hint to converter to insert page break (PDF, print output).
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-End of chapter 1.
-
-<<<
-
-Start of chapter 2.
-```
+Not supported.
 
 ---
 
@@ -1776,18 +1552,8 @@ Welcome to {product} version {version}!
 ```
 
 #### 5.15.2 Counter Attributes
-**Syntax:** `{counter:name}` or `{counter2:name}`
 
-**Description:** Auto-incrementing counters for numbering.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-Figure {counter:figure}: First diagram
-Figure {counter:figure}: Second diagram
-// Outputs: Figure 1, Figure 2
-```
+Not supported.
 
 #### 5.15.3 Text Replacements
 **Syntax:** Automatic conversion of special character sequences
@@ -1818,19 +1584,8 @@ Ellipsis...
 ```
 
 #### 5.15.5 Passthrough Substitution
-**Syntax:** `pass:[content]`, `pass:c[content]`, etc.
 
-**Description:** Control which substitutions are applied to content.
-
-**AsciiDoc Equivalent:** Identical syntax.
-
-**Example:**
-```
-pass:[<u>HTML tags preserved</u>]
-pass:c,q[*bold* with {attr} replacement]
-```
-
----
+Not supported.
 
 ### 5.16 Block Metadata Features
 
@@ -1866,22 +1621,22 @@ This paragraph has custom styling.
 ```
 
 #### 5.16.3 Block Options
-**Syntax:** `[%option]` or `[options="option1,option2"]` before block
+**Syntax:** `[options="option1,option2"]` before block
 
-**Description:** Control block behavior (e.g., %header, %footer, %hardbreaks).
+**Description:** Control block behavior (e.g., header, footer).
 
 **AsciiDoc Equivalent:** Identical syntax.
 
 **Example:**
 ```
-[%header%footer]
+[options="header,footer"]
 |===
 |Header
 |Content
 |Footer
 |===
 
-[%hardbreaks]
+[options="hardbreaks"]
 Lines break
 where I
 put them
@@ -1910,34 +1665,7 @@ print("Hello, world!")
 ---
 
 ### 5.17 Extension Features
-
-#### 5.17.1 Custom Block Processors
-**Syntax:** Extensible via implementation (not syntax-level)
-
-**Description:** Register custom block types for domain-specific content.
-
-**AsciiDoc Equivalent:** Identical extension mechanism.
-
-#### 5.17.2 Custom Inline Macros
-**Syntax:** Extensible via implementation (not syntax-level)
-
-**Description:** Define new inline macro types (e.g., `jira:PROJ-123[]`).
-
-**AsciiDoc Equivalent:** Identical extension mechanism.
-
-#### 5.17.3 Custom Block Macros
-**Syntax:** Extensible via implementation (not syntax-level)
-
-**Description:** Define new block macro types for embedding custom content.
-
-**AsciiDoc Equivalent:** Identical extension mechanism.
-
-#### 5.17.4 Tree Processors
-**Syntax:** Extensible via implementation (not syntax-level)
-
-**Description:** Transform the parsed document tree before conversion.
-
-**AsciiDoc Equivalent:** Identical extension mechanism.
+Not supported.
 
 ---
 
@@ -1958,7 +1686,7 @@ print("Hello, world!")
 | **Paragraphs** |
 | Normal | Consecutive lines | |
 | Literal | Indent with space | |
-| Line break | `space+plus` or `[%hardbreaks]` | |
+| Line break | `space+plus` | |
 | Lead | `[.lead]` | |
 | Admonition | `NOTE:` prefix | |
 | **Text Formatting** |
@@ -1974,7 +1702,7 @@ print("Hello, world!")
 | Ordered | `.` markers | |
 | Checklist | `[*]`, `[x]`, `[ ]` | |
 | Description | `term::` | |
-| Q&A | `[qanda]` | |
+| Q&A | | not supported |
 | Continuation | `+` | |
 | **Delimited Blocks** |
 | Listing | `----` | |
@@ -1983,17 +1711,17 @@ print("Hello, world!")
 | Example | `====` | |
 | Sidebar | `****` | |
 | Open | `--` | |
-| Passthrough | `++++` | |
+| Passthrough |  | not supported |
 | Comment | `////` | |
 | Source code | `[source,lang]` + `----` | |
 | **Tables** |
 | Basic | `\|===` delimiters | |
-| Header | First row or `[%header]` | |
+| Header | First row or `[options="header"]` | |
 | Columns | `[cols="spec"]` | |
-| Cell span | `2+\|`, `.2+\|` | |
+| Column span | `2+\|` | |
 | Cell align | `<\|`, `^\|`, `>\|` | |
-| Cell style | `a\|`, `l\|`, etc. | |
-| CSV format | `[format=csv]` | |
+| Cell style | | not supported|
+| CSV format | | not supported|
 | **Links** |
 | URL auto | `https://url` | |
 | URL with text | `https://url[text]` | |
@@ -2003,38 +1731,38 @@ print("Hello, world!")
 | Xref | `<<id>>`, `xref:id[]` | |
 | Inter-doc xref | `xref:file#id[]` | |
 | **Media** |
-| Block image | `image::file[]` | |
+| Block image |  | substituted |
 | Inline image | `image:file[]` | |
 | Image attrs | `[alt,width,height]` | |
-| Audio | `audio::file[]` | |
-| Video | `video::file[]` | |
-| YouTube/Vimeo | `video::id[youtube]` | |
+| Audio |  | not supported|
+| Video |  | not supported|
+| YouTube/Vimeo |  | not supported|
 | **Includes** |
 | Include file | `include::file[]` | |
 | Tag selection | `[tag=name]` | |
 | Line ranges | `[lines=1..10]` | |
 | **Macros** |
-| Keyboard | `kbd:[key]` | |
-| Button | `btn:[text]` | |
-| Menu | `menu:path[]` | |
+| Keyboard |  | not supported|
+| Button | | not supported|
+| Menu | | not supported|
 | Footnote | `footnote:[text]` | |
-| Index terms | `indexterm:[]`, `((text))` | |
+| Index terms | `(((text)))`, `((text))` | |
 | **Math** |
-| Inline STEM | `stem:[expr]` | |
-| Block STEM | `[stem]` + `++++` | |
-| LaTeX | `:stem: latexmath` | |
-| Equation numbering | `:eqnums:` | |
+| Inline STEM |  | substituted|
+| Block STEM |  | substituted|
+| Equation numbering |  | substituted|
+| LaTeX | `latexmath:` | |
 | **Directives** |
 | ifdef | `ifdef::attr[]` | |
 | ifndef | `ifndef::attr[]` | |
-| ifeval | `ifeval::[expr]` | |
-| Multi-attr | `ifdef::a+b[]`, `ifdef::a,b[]` | |
+| ifeval |  | not supported|
+| Multi-attr | `ifdef::a,b[]` | |
 | **Comments** |
 | Line | `//` | |
 | Block | `////` | |
 | **Breaks** |
 | Thematic | `'''`, `---`, `***` | |
-| Page | `<<<` | |
+| Page | | not supported|
 | **Special Sections** |
 | Bibliography | `[bibliography]` | |
 | Glossary | `[glossary]` | |
@@ -2043,26 +1771,26 @@ print("Hello, world!")
 | Appendix | `[appendix]` | |
 | **Attributes** |
 | Reference | `{attr}` | |
-| Counter | `{counter:name}` | |
+| Counter |  | substituted|
 | Text replacement | `(C)` → ©, etc. | |
 | Escape | `\*not bold\*` | |
-| Passthrough | `pass:[content]` | |
+| Passthrough | | not supported|
 | **Metadata** |
 | Block ID | `[[id]]`, `[#id]` | |
 | Block role | `[.role]` | |
-| Block options | `[%option]` | |
+| Block options | `[options="option"]` | |
 | Block title | `.Title` | |
 | **Extensions** |
-| Block processor | Extension API | |
-| Inline macro | Extension API | |
-| Block macro | Extension API | |
-| Tree processor | Extension API | |
+| Block processor |  | not supported|
+| Inline macro | | not supported|
+| Block macro |  | not supported|
+| Tree processor | | not supported|
 
 ### Summary
 
-LeanDoc achieves **100% feature parity** with AsciiDoc while maintaining syntax compatibility. This means:
+LeanDoc is the essential subset of AsciiDoc while maintaining syntax compatibility. This means:
 
-1. **All AsciiDoc documents are valid LeanDoc documents**
+1. **All LeanDoc documents are valid AsciiDoc documents (but not vice versa)**
 2. **The grammar is fully parsable by a single recursive descent parser**
 3. **No sub-parsers or context-switching parsers are required**
 4. **Most common features require minimal syntax**

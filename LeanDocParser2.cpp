@@ -308,8 +308,7 @@ Node* Parser::parseBlock()
     if (la(0).kind == LineTok::T_DELIM_LISTING || la(0).kind == LineTok::T_DELIM_LITERAL ||
         la(0).kind == LineTok::T_DELIM_QUOTE || la(0).kind == LineTok::T_DELIM_EXAMPLE ||
         la(0).kind == LineTok::T_DELIM_SIDEBAR || la(0).kind == LineTok::T_DELIM_OPEN ||
-        la(0).kind == LineTok::T_DELIM_PASSTHROUGH || la(0).kind == LineTok::T_DELIM_COMMENT ||
-        la(0).kind == LineTok::T_STEM_ATTR_LINE)
+        la(0).kind == LineTok::T_DELIM_COMMENT )
         return parseDelimited(meta);
 
     if (la(0).kind == LineTok::T_BLOCK_MACRO)
@@ -424,13 +423,7 @@ Node* Parser::parseParagraphOrLiteral(BlockMeta* m)
 
 Node* Parser::parseDelimited(BlockMeta* m)
 {
-    // Handles: Listing/Literal/Quote/Example/Sidebar/Open/Passthrough/Comment, plus StemBlock
-    // StemBlock grammar: [stem] then ++++ ... ++++
-    bool isStem = false;
-    if (la(0).kind == LineTok::T_STEM_ATTR_LINE) {
-        take();
-        isStem = true;
-    }
+    // Handles: Listing/Literal/Quote/Example/Sidebar/Open/Passthrough/Comment
 
     LineTok::Kind k = la(0).kind;
     LineTok open = take();
@@ -439,11 +432,10 @@ Node* Parser::parseDelimited(BlockMeta* m)
     b->pos = SourcePos(open.lineNo, 1);
     b->meta = m;
     b->kv.insert("delim", QString::number((int)k));
-    b->kv.insert("stem", isStem ? "1" : "0");
 
     // Listing/Literal/Passthrough/Comment/Stem are raw-ish; Quote/Example/Sidebar/Open contain BlockContent
     bool rawOnly = (k == LineTok::T_DELIM_LISTING || k == LineTok::T_DELIM_LITERAL ||
-                    k == LineTok::T_DELIM_PASSTHROUGH || k == LineTok::T_DELIM_COMMENT || isStem);
+                    k == LineTok::T_DELIM_COMMENT);
 
     if (rawOnly) {
         QStringList lines;
@@ -513,8 +505,7 @@ Node* Parser::parseList(BlockMeta* m)
                 Node* cont = (la(0).kind == LineTok::T_DELIM_LISTING || la(0).kind == LineTok::T_DELIM_LITERAL ||
                               la(0).kind == LineTok::T_DELIM_QUOTE   || la(0).kind == LineTok::T_DELIM_EXAMPLE ||
                               la(0).kind == LineTok::T_DELIM_SIDEBAR || la(0).kind == LineTok::T_DELIM_OPEN ||
-                              la(0).kind == LineTok::T_DELIM_PASSTHROUGH || la(0).kind == LineTok::T_DELIM_COMMENT ||
-                              la(0).kind == LineTok::T_STEM_ATTR_LINE)
+                              la(0).kind == LineTok::T_DELIM_COMMENT )
                              ? parseDelimited(0)
                              : parseParagraphOrLiteral(0);
                 if (cont)
@@ -653,12 +644,12 @@ Node* Parser::parseTable(BlockMeta* m)
 
 Node* Parser::parseBlockMacro(BlockMeta* m)
 {
-    // BlockMacro grammar: image::/video::/audio::/include::/custom::target[attrs]
+    // BlockMacro grammar: include::/custom::target[attrs]
     LineTok t = take();
     Node* n = new Node(Node::K_BlockMacro);
     n->pos = SourcePos(t.lineNo, 1);
     n->meta = m;
-    n->name = t.head;  // "image", "video", "audio", "include", or custom
+    n->name = t.head;  // "image", "include", or custom
     n->target = t.rest; // still contains "path[...]" portion
     return n;
 }
@@ -830,7 +821,9 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
             }
         }
 
-        // TODO: inline image image:
+        // TODO: inline image image: and automatic image block detection
+        // TODO: inline latexmath: and automatic formula block detection
+        // TODO: index ((TEXT_RUN)) and (((TEXT_RUN)))
 
         // Inline macro: name:...[...] (best-effort)
         {
@@ -897,7 +890,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
             int j = s.indexOf('*', i+1);
             if (j > i+1) {
                 pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Emph);
+                Node* e = new Node(Node::   K_Emph);
                 e->pos = SourcePos(lineNo, 1);
                 e->name = "bold";
                 e->children = parseInlineContentRec(s.mid(i+1, j-(i+1)), lineNo, depth+1);
@@ -1002,6 +995,8 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 continue;
             }
         }
+#if 0
+        // not supported
         // passthrough: +...+ / ++...++ / +++...+++ (nested parsing allowed by grammar)
         if (s[i]=='+') {
             int plusN=1;
@@ -1022,6 +1017,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 }
             }
         }
+#endif
 
         // default char
         acc.append(s[i]);

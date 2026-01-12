@@ -44,9 +44,7 @@ const char* LineTok::kindName(Kind k)
     case T_DELIM_EXAMPLE: return "DELIM_EXAMPLE";
     case T_DELIM_SIDEBAR: return "DELIM_SIDEBAR";
     case T_DELIM_OPEN: return "DELIM_OPEN";
-    case T_DELIM_PASSTHROUGH: return "DELIM_PASSTHROUGH";
     case T_DELIM_COMMENT: return "DELIM_COMMENT";
-    case T_STEM_ATTR_LINE: return "STEM_ATTR_LINE";
     case T_TABLE_DELIM: return "TABLE_DELIM";
     case T_TABLE_LINE: return "TABLE_LINE";
     case T_BLOCK_MACRO: return "BLOCK_MACRO";
@@ -149,15 +147,6 @@ LineTok Lexer::classify(const QString& line, int lineNo)
         t.rest = s;
         return t;
     }
-    if (s.startsWith("[") && s.endsWith("]")) {
-        if (s == "[stem]") {
-            t.kind = LineTok::T_STEM_ATTR_LINE;
-            return t;
-        }
-        t.kind = LineTok::T_BLOCK_ATTRS;
-        t.rest = s;
-        return t;
-    }
     if (s.size()>=2 && s[0]=='.' && !s[1].isSpace()) { // ".Title" per grammar (no forced space)
         t.kind = LineTok::T_BLOCK_TITLE;
         t.rest = s.mid(1);
@@ -165,7 +154,7 @@ LineTok Lexer::classify(const QString& line, int lineNo)
     }
 
     // directives (preprocessor)
-    if (isPrefix(s, "ifdef::") || isPrefix(s, "ifndef::") || isPrefix(s, "ifeval::") || isPrefix(s, "endif::")) {
+    if (isPrefix(s, "ifdef::") || isPrefix(s, "ifndef::") || isPrefix(s, "endif::")) {
         t.kind = LineTok::T_DIRECTIVE;
         int p = s.indexOf("::");
         t.head = s.left(p);
@@ -174,7 +163,8 @@ LineTok Lexer::classify(const QString& line, int lineNo)
     }
 
     // block macros
-    if (isPrefix(s, "image::") || isPrefix(s, "video::") || isPrefix(s, "audio::") || isPrefix(s, "include::")) {
+    if (isPrefix(s, "include::")) {
+        // image:: is now just a normal paragraph which only contains an image: or latexmath:
         t.kind = LineTok::T_BLOCK_MACRO;
         int p = s.indexOf("::");
         t.head = s.left(p);
@@ -288,10 +278,6 @@ LineTok Lexer::classify(const QString& line, int lineNo)
     }
     if (s == "--") {
         t.kind = LineTok::T_DELIM_OPEN;
-        return t;
-    }
-    if (s == "++++") {
-        t.kind = LineTok::T_DELIM_PASSTHROUGH;
         return t;
     }
     if (s == "////") {

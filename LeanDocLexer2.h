@@ -58,19 +58,15 @@ struct LineTok {
         T_DELIM_EXAMPLE,       // ====
         T_DELIM_SIDEBAR,       // ****
         T_DELIM_OPEN,          // --
-        T_DELIM_PASSTHROUGH,   // ++++
         T_DELIM_COMMENT,       // ////
-
-        // stem block metadata line: [stem] (special case in grammar) [file:1]
-        T_STEM_ATTR_LINE,      // [stem] line
 
         // tables
         T_TABLE_DELIM,     // |===
         T_TABLE_LINE,      // any line starting with '|'
 
         // block macros & directives
-        T_BLOCK_MACRO,     // image::, video::, audio::, include::, ident::...
-        T_DIRECTIVE,       // ifdef::, ifndef::, ifeval::, endif::
+        T_BLOCK_MACRO,     // image::, include::, ident::...
+        T_DIRECTIVE,       // ifdef::, ifndef::, endif::
 
         // otherwise
         T_TEXT

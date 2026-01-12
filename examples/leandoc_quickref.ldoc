@@ -105,8 +105,7 @@ Another:: Explanation
 
 == Images
 
-Block:: `image::file.png[]`
-Inline:: `image:file.png[]`
+Inline & Block:: `image:file.png[]`
 
 == Tables
 

@@ -5,8 +5,6 @@ v2.0, 2026-01-09
 :toclevels: 3
 :numbered:
 :source-highlighter: pygments
-:stem:
-:experimental:
 :project-name: LeanDoc Parser
 :project-version: 2.0
 
@@ -18,7 +16,7 @@ This document describes the implementation of a production-quality parser for th
 == Architecture Overview
 
 .System Architecture
-image::architecture-diagram.svg[System Architecture,800,600,align=center]
+image:architecture-diagram.svg[System Architecture,800,600,align=center]
 
 The {project-name} consists of four main components:
 
@@ -43,15 +41,12 @@ ifdef::include-performance[]
 
 The parser achieves stem:[O(n)] time complexity where stem:[n] is the input size.
 
-[stem]
-++++
-T(n) = c_1 \cdot n + c_2
-++++
+latexmath:[T(n) = c_1 \cdot n + c_2]
 
 Where:
 
-* stem:[c_1] is the per-character processing cost
-* stem:[c_2] is the initialization overhead
+* latexmath:[c_1] is the per-character processing cost
+* latexmath:[c_2] is the initialization overhead
 endif::[]
 
 == Lexical Analysis
@@ -140,7 +135,7 @@ Token lexer_next_token(Lexer* lex) {
 <2> Handles `*`, `_`, `` ` ``, etc.
 <3> Returns runs of regular text
 
-TIP: Use kbd:[Ctrl+C] to interrupt the lexer during debugging.
+TIP: Use [Ctrl+C] to interrupt the lexer during debugging.
 
 == Syntax Analysis
 
@@ -378,33 +373,26 @@ The parser supports both inline and block mathematical expressions.
 
 === Inline Math
 
-The Pythagorean theorem states that stem:[a^2 + b^2 = c^2].
+The Pythagorean theorem states that latexmath:[a^2 + b^2 = c^2].
 
-For chemistry, water is stem:[H_2O] and glucose is stem:[C_6H_12O_6].
+For chemistry, water is latexmath:[H_2O] and glucose is latexmath:[C_6H_12O_6].
 
 === Block Math
 
-[stem]
-++++
-sum_(i=1)^n i = (n(n+1))/2
-++++
+latexmath:[sum_(i=1)^n i = (n(n+1))/2]
 
-[stem]
-++++
-int_0^oo e^(-x^2) dx = sqrt(pi)/2
-++++
+latexmath:[int_0^oo e^(-x^2) dx = sqrt(pi)/2]
 
 === LaTeX Support
 
-When using `:stem: latexmath`, more complex expressions are possible:
+When using `latexmath`, more complex expressions are possible:
 
-[stem]
-++++
+latexmath:[
 \begin{aligned}
 \nabla \times \mathbf{E} &= -\frac{\partial \mathbf{B}}{\partial t} \\
 \nabla \times \mathbf{H} &= \mathbf{J} + \frac{\partial \mathbf{D}}{\partial t}
 \end{aligned}
-++++
+]
 
 == Preprocessor Directives
 
@@ -426,7 +414,8 @@ ifdef::backend-html5,backend-pdf[]
 This appears in both HTML and PDF output.
 endif::[]
 
-ifdef::advanced+enterprise[]
+ifdef::advanced[]
+ifdef::enterprise[]
 == Enterprise Features
 
 This section only appears when both `advanced` and `enterprise` attributes are set.
@@ -435,16 +424,6 @@ This section only appears when both `advanced` and `enterprise` attributes are s
 * Feature 2
 * Feature 3
 endif::[]
-
-=== Value-Based Conditions
-
-:version: 2.0
-
-ifeval::[{version} >= 2.0]
-.Version 2.0 Features
-* New parser optimization
-* Improved error messages
-* Better memory management
 endif::[]
 
 == Error Handling
@@ -453,7 +432,6 @@ endif::[]
 
 The parser should report several error categories:
 
-[qanda]
 What is a syntax error?::
   A violation of the language grammar rules, such as mismatched delimiters or invalid token sequences.
 
@@ -535,7 +513,7 @@ Measure parsing performance:
 
 == Code Quality
 
-Use menu:Tools[Static Analysis > Run All] to check code quality.
+Use [Static Analysis > Run All] to check code quality.
 
 Required tools:
 
@@ -543,7 +521,7 @@ Required tools:
 * `valgrind` for memory checking
 * `gdb` for debugging
 
-Press kbd:[F5] to build and run tests.
+Press [F5] to build and run tests.
 
 '''
 
@@ -555,15 +533,7 @@ This implementation guide provides a complete foundation for building a LeanDoc 
 . Handle errors gracefully
 . Test thoroughly
 . Optimize only when necessary
-
-++++
-<div class="custom-callout">
-<strong>Success!</strong> You now have everything needed to implement a production-quality parser.
-</div>
-++++
-
-<<<
-
+::
 [glossary]
 == Glossary
 

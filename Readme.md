@@ -1,6 +1,6 @@
 ## Welcome to the LeanDoc project
 
-LeanDoc is a semantic document markup language designed to cover the complete feature set of [AsciiDoc](https://asciidoc.org/) 
+LeanDoc is a semantic document markup language designed to cover the essential subset of [AsciiDoc](https://asciidoc.org/) 
 while being formally specified and parsable by a single recursive descent parser. The language prioritizes minimal boilerplate 
 syntax, uniform constructs, and ease of learning for the most commonly used features.
 
@@ -8,9 +8,13 @@ syntax, uniform constructs, and ease of learning for the most commonly used feat
 
 ### Why LeanDoc
 
-LeanDoc’s specification is intentionally “very similar” to AsciiDoc, and it even claims full feature parity and broad syntax compatibility.  
-The biggest *practical* difference is that LeanDoc is specified (and constrained) to be cleanly parsable by a single, line-oriented 
+LeanDoc’s specification is intentionally “very similar” to AsciiDoc; it is an essential subset with full syntax compatibility.  
+LeanDoc is specified (and constrained) to be cleanly parsable by a single, line-oriented 
 recursive-descent grammar, so it regularizes/limits a few historically “looser” corners to remove ambiguity.
+To achieve a "Lean" implementation while maintaining the semantic power of AsciiDoc, features that caused high parsing complexity 
+(e.g., non-context-free grammar elements) or are relics of older print-centric workflows were removed.
+
+Each LeanDoc document is a valid AsciiDoc document (but not vice versa).
 
 LeanDoc is easier to parse because it is specified as a formal, line-oriented LL(k) grammar intended to be handled by a single recursive-descent 
 parser with bounded lookahead and no backtracking, whereas AsciiDoc’s real-world syntax (especially inline) is largely defined by a substitution 
@@ -23,8 +27,8 @@ for humans to understand, since humans possess far less parsing capability than 
 for single-pass, top-down parsing, ensuring both efficient compilation and human comprehension. If a language is ambiuous for the parser, 
 then the outcome for the human is a surprise at best.
 
-While I'm aware of the AsciiDoc specification effort, I think that the issues are symptoms of the language itself rather than just missing prose. That's why
-I decided for a small number of deliberate language changes to remove ambiguity and reduce context sensitivity. As a side-effect, the result is also
+While I'm aware of the AsciiDoc specification effort, I think that the issues are symptoms of the language itself rather than just the missing specification. That's why
+I decided for a number of deliberate language changes to make it leaner, remove ambiguity and reduce context sensitivity. As a side-effect, the result is also
 much easier to specify.
 
 Here are some of the differences to AsciiDoc. For more information see [the specification](./documentation/The_LeanDoc_Language_Specification.md).
@@ -41,10 +45,31 @@ LeanDoc’s inline grammar cleanly separates “constrained” vs “unconstrain
 
 LeanDoc emphasizes a single bracket-based metadata style (attributes/IDs/roles/options) across contexts (e.g., block attributes are parsed as a bracket list, anchors as `[[id,...]]`, roles as `[.role]`, options as `[%option]`, etc.).  The spec also calls out “Attribute Scoping” as a deterministic rule: block attributes are consumed by the immediately following block (i.e., a parser rule, not a best-effort heuristic).
 
+#### Removed features
+
+Verse blocks, video and audio block macros, page breaks, `ifeval` directive + expressions + operators + values (but `ifdef` and `ifndef` are still available), 
+
+`indexterm:[]`, `indexterm2:[]` (but flow index terms with `((term))` or `(((term)))` are still supported), counters (automatically handled via references),
+
+block images (`image::`, instead use a paragraph with only an inline image), 
+
+stem, eqnums and passtrough (`pass:`, `++++`, instead use `latexmath:` for both inline and blocks),
+
+table row spans and cell style, `[%option]` syntax in favour of `[options="option1,option2"]` syntax, CSV tables,
+
+`[%hardbreaks]` option (use the + break method instead),
+
+include only by singular tag (no complex tag filtering logic like `tags=a;b` or exclusions `tag=!a`),
+
+`ifdef::attr1+attr2[]` AND logic (OR logic still supported), `[qanda]` (just use description lists or titles),
+
+no `kbd:`, `btn:`, `menu:` macros, 
+
+`anchor:anchorid[]` syntax (`[[id]]` and `[#id]` still available).
 
 ### Planned features
 
-- [x] Derive a new language from AsciiDoc with a similar syntax, but parseable and with no ambiguity
+- [x] Derive a new, lean subset from AsciiDoc with a similar syntax, but parseable and with no ambiguity
 - [x] Lexer, parser, AST 
 - [ ] Semantic validator, processing includes and conditional compilation
 - [x] Typst generator (WIP)

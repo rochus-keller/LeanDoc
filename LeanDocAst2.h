@@ -34,7 +34,7 @@ struct SourcePos {
 };
 
 struct BlockMeta {
-    // From BlockMetadata grammar: [[id, text]] + [attrlist] + .Title [file:1]
+    // From BlockMetadata grammar: [[id, text]] + [attrlist] + .Title
     QString anchorId;
     QString anchorText;     // optional
     QString title;          // block title line (.Title)
@@ -62,8 +62,8 @@ public:
         K_TableRow,
         K_TableCell,
 
-        K_BlockMacro,            // image::, video::, audio::, include::, custom::target[]
-        K_Directive,             // ifdef/ifndef/ifeval/endif (endif represented as part of directive node)
+        K_BlockMacro,            // include::, custom::target[]
+        K_Directive,             // ifdef/ifndef/endif (endif represented as part of directive node)
         K_ThematicBreak,
         K_PageBreak,
         K_LineComment,
@@ -71,7 +71,7 @@ public:
         // Inline-level
         K_Text,
         K_Space,                 // optional: keep significant whitespace as nodes
-        K_LineBreak,             // " <space>+<EOL>" [file:1]
+        K_LineBreak,             // " <space>+<EOL>"
         K_Emph,                  // bold/italic/mono/highlight/underline/etc.
         K_Superscript,
         K_Subscript,
@@ -79,10 +79,10 @@ public:
         K_Link,                  // auto url, url[text], email, link:target[text]
         K_ImageInline,           // image:path[attrs]
         K_AnchorInline,          // [[id]] or [#id] in inline context
-        K_Xref,                  // <<id,text>> or xref:id[text] [file:1]
-        K_AttrRef,               // {name} and counter forms
-        K_InlineMacro,           // kbd:/btn:/menu:/pass:/footnote:/indexterm:/stem:/custom [file:1]
-        K_PassthroughInline      // +...+, ++...++, +++...+++ [file:1]
+        K_Xref,                  // <<id,text>> or xref:id[text]
+        K_AttrRef,               // {name} form
+        K_InlineMacro,           // footnote:/latexmath:/custom
+        K_PassthroughInline      // +...+, ++...++, +++...+++
     };
 
     explicit Node(Kind k) : kind(k), pos(), meta(0) {}
@@ -119,10 +119,10 @@ public:
 };
 
 struct TableCellSpec {
-    int colspan;    // ColSpan DIGIT+ [file:1]
-    int rowspan;    // RowSpan .DIGIT+ [file:1]
-    QChar align;    // '<' '^' '>' [file:1]
-    QChar style;    // a,e,h,l,m,s,v [file:1]
+    int colspan;    // ColSpan DIGIT+
+    int rowspan;    // RowSpan .DIGIT+
+    QChar align;    // '<' '^' '>'
+    QChar style;    // a,e,h,l,m,s,v
     TableCellSpec():colspan(1),rowspan(1),align(QChar()),style(QChar()){}
 };
 
