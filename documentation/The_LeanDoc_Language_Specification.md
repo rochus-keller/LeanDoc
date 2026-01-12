@@ -4,7 +4,7 @@
 
 # LeanDoc: A Semantic Document Language in the tradition of AsciiDoc
 
-**Version:** 2026-01-09, work in progress
+**Version:** 2026-01-12, work in progress
 **Author:** me@rochus-keller.ch
 
 ---
@@ -130,7 +130,7 @@ Document = [ DocumentHeader ] DocumentBody ;
 DocumentHeader = DocumentTitle 
                  [ AuthorLine ]
                  [ RevisionLine ]
-                 AttributeEntry* ;
+                 AttributeLine* ;
 
 DocumentTitle = LINE_START EQUALS WHITESPACE+ TEXT_RUN LINE_END ;
 
@@ -145,7 +145,7 @@ RevisionLine = LINE_START "v" VERSION_NUMBER
 VERSION_NUMBER = DIGIT+ ( "." DIGIT+ )* ;
 DATE = DIGIT DIGIT DIGIT DIGIT "-" DIGIT DIGIT "-" DIGIT DIGIT ;
 
-AttributeEntry = LINE_START COLON IDENTIFIER COLON 
+AttributeLine = LINE_START COLON IDENTIFIER COLON 
                  [ WHITESPACE+ AttributeValue ] LINE_END ;
 
 AttributeValue = TEXT_RUN | BLANK ;
@@ -158,11 +158,13 @@ DocumentBody = ( Block | BLANK_LINE )* ;
 ```ebnf
 Block = [ BlockMetadata ] 
         ( Section 
+        | AdmonitionParagraph
         | Paragraph 
         | DelimitedBlock 
         | List 
         | Table 
         | BlockMacro 
+        | Directive
         | ThematicBreak 
         | PageBreak
         | Comment ) ;
@@ -195,13 +197,14 @@ SectionBody = ( Block | BLANK_LINE )* ;
 ### 4.4 Paragraphs
 
 ```ebnf
-Paragraph = ParagraphLine+ ;
+Paragraph = LiteralParagraph | NormalParagraph ;
+NormalParagraph = ParagraphLine+ ;
 
-ParagraphLine = LINE_START [ WHITESPACE ] InlineContent LINE_END ;
+ParagraphLine = LINE_START InlineContent LINE_END ;
 
 (* Special paragraph types *)
-LiteralParagraph = LINE_START " " TEXT_RUN LINE_END 
-                   ( LINE_START " " TEXT_RUN LINE_END )* ;
+LiteralParagraph = LINE_START WHITESPACE+ TEXT_RUN LINE_END 
+                   ( LINE_START WHITESPACE+ TEXT_RUN LINE_END )* ;
 
 AdmonitionParagraph = LINE_START AdmonitionLabel COLON 
                       WHITESPACE+ InlineContent LINE_END ;
@@ -316,11 +319,11 @@ TableDelimiterClose = LINE_START PIPE EQUALS{3} LINE_END ;
 
 TableContent = ( TableRow | BLANK_LINE )* ;
 
-TableRow = TableCell+ LINE_END ;
+TableRow = LINE_START (PIPE TableCell)+ LINE_END ;
 
-TableCell = [ LINE_START ] PIPE [ CellSpec ] InlineContent ;
+TableCell = [ CellSpec ] InlineContent ;
 
-CellSpec = [ ColSpan ] [ RowSpan ] [ Alignment ] [ Style ] PIPE ;
+CellSpec = [ ColSpan ] [ RowSpan ] [ Alignment ] [ Style ] ;
 
 ColSpan = DIGIT+ ;
 RowSpan = DOT DIGIT+ ;
@@ -348,6 +351,7 @@ InlineElement = Bold
               | InlineMacro
               | InlineStem
               | Passthrough
+              | InlineStem
               | LineBreak ;
 
 (* Constrained (word boundary) formatting *)
@@ -379,10 +383,7 @@ EmailLink = IDENTIFIER "@" IDENTIFIER ( "." IDENTIFIER )+ ;
 
 InternalLink = "link:" IDENTIFIER "[" InlineContent "]" ;
 
-Image = InlineImage | BlockImage ;
-
-InlineImage = "image:" ImagePath "[" [ ImageAttributes ] "]" ;
-BlockImage = LINE_START "image::" ImagePath "[" [ ImageAttributes ] "]" LINE_END ;
+Image = "image:" ImagePath "[" [ ImageAttributes ] "]" ;
 
 ImagePath = ( ANY_CHAR - ( "[" | "]" | WHITESPACE ) )+ ;
 ImageAttributes = [ InlineContent ] { "," AttributeEntry } ;

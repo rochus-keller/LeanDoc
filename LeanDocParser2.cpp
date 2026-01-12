@@ -380,7 +380,7 @@ Node* Parser::parseAdmonitionParagraph(BlockMeta* m)
 Node* Parser::parseParagraphOrLiteral(BlockMeta* m)
 {
     // LiteralParagraph starts with at least one space in the raw line
-    bool literal = (la(0).kind == LineTok::T_TEXT && !la(0).raw.isEmpty() && la(0).raw[0].isSpace());
+    const bool literal = (la(0).kind == LineTok::T_TEXT && !la(0).raw.isEmpty() && la(0).raw[0].isSpace());
 
     Node* p = new Node(literal ?
                            Node::K_LiteralParagraph :
@@ -829,6 +829,8 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 continue;
             }
         }
+
+        // TODO: inline image image:
 
         // Inline macro: name:...[...] (best-effort)
         {
