@@ -4,7 +4,7 @@
 
 # LeanDoc: A Semantic Document Language in the tradition of AsciiDoc
 
-**Version:** 2026-01-12, work in progress
+**Version:** 2026-01-13, work in progress
 **Author:** me@rochus-keller.ch
 
 ---
@@ -1636,10 +1636,6 @@ This paragraph has custom styling.
 |Footer
 |===
 
-[options="hardbreaks"]
-Lines break
-where I
-put them
 ```
 
 #### 5.16.4 Block Title
