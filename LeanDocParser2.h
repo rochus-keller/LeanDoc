@@ -28,64 +28,52 @@
 
 namespace LeanDoc {
 
-struct ParseError {
-    int line;
-    int column;
-    QString message;
-    ParseError():line(0),column(0){}
-};
-
 class Parser {
 public:
-    Parser():dhaveErr(false){}
-    Node* parse(const QString& input, ParseError* outErr);
+    Node* parse(const QString& input);
+
+    struct Error {
+        RowCol pos;
+        QString message;
+        Error(){}
+        Error(const QString& m, int l, int c=1):pos(l,c),message(m){}
+    };
+    QList<Error> errors;
 
 private:
-    // document/header
     Node* parseDocument();
     void parseDocumentHeader(Node* doc);
 
-    // block parsing
     Node* parseBlock();
-    BlockMeta* parseBlockMetaOpt(); // returns new BlockMeta or 0
-
+    BlockMeta* parseBlockMetaOpt();
     Node* parseSection(BlockMeta* m);
     Node* parseParagraphOrLiteral(BlockMeta* m);
     Node* parseAdmonitionParagraph(BlockMeta* m);
-
-    Node* parseDelimited(BlockMeta* m);        // ---- .... ____ ==== **** -- ++++ //// or [stem]++++ ++++
+    Node* parseDelimited(BlockMeta* m);
     Node* parseList(BlockMeta* m);
     Node* parseTable(BlockMeta* m);
-
     Node* parseBlockMacro(BlockMeta* m);
     Node* parseDirective(BlockMeta* m);
-
     Node* parseBreakOrComment(BlockMeta* m);
 
-    // inline
     QList<Node*> parseInlineContent(const QString& s, int lineNo);
     QList<Node*> parseInlineContentRec(const QString& s, int lineNo, int depth);
     void pushText(QList<Node*>& out, const QString& t, int lineNo);
+    QList<Node*> readCells(const LineTok& rowTok);
 
-    // helpers
     const LineTok& la(int k=0) const { return dlex.peek(k); }
     LineTok take() { return dlex.take(); }
     bool accept(LineTok::Kind k);
-    void expect(LineTok::Kind k, const QString& what);
+    bool expect(LineTok::Kind k, const char* where);
     void error(const QString& msg, int row, int col = 1);
-    void skipBlankAndLineComments(); // ignores T_BLANK and T_LINE_COMMENT as blocks
-    QList<Node*> readCells(const LineTok&);
+    void skipBlankLines();
 
-    static QMap<QString, QString> parseAttrList(const QString& bracketed); // "[a=b,c]" or inside
+    static QMap<QString, QString> parseAttrList(const QString& bracketed);
     static QString stripOuter(const QString& s, QChar a, QChar b);
 
-private:
     Lexer dlex;
-    bool dhaveErr;
-    ParseError derr;
 };
 
-} // namespace LeanDoc2
+} // namespace LeanDoc
 
 #endif
-

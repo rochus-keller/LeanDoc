@@ -4,11 +4,11 @@ LeanDoc is a semantic document markup language designed to cover the essential s
 while being formally specified and parsable by a single recursive descent parser. The language prioritizes minimal boilerplate 
 syntax, uniform constructs, and ease of learning for the most commonly used features.
 
-**NOTE** that this project is in an early stage and work-in-progress.
+**NOTE** that this project is work-in-progress.
 
 ### Why LeanDoc
 
-LeanDoc’s specification is intentionally “very similar” to AsciiDoc; it is an essential subset with full syntax compatibility.  
+LeanDoc’s features are intentionally “very similar” to AsciiDoc; it is an essential subset with full syntax compatibility.  
 LeanDoc is specified (and constrained) to be cleanly parsable by a single, line-oriented 
 recursive-descent grammar, so it regularizes/limits a few historically “looser” corners to remove ambiguity.
 To achieve a "Lean" implementation while maintaining the semantic power of AsciiDoc, features that caused high parsing complexity 
@@ -71,7 +71,8 @@ no `kbd:`, `btn:`, `menu:` macros,
 
 - [x] Derive a new, lean subset from AsciiDoc with a similar syntax, but parseable and with no ambiguity
 - [x] Lexer, parser, AST 
-- [ ] Semantic validator, processing includes and conditional compilation
+- [ ] Semantic validator
+- [x] Processing includes and conditional compilation
 - [x] Typst generator (WIP)
 - [ ] Integration with Typos engine
 
@@ -85,6 +86,12 @@ are work-in-progress though.
 A first version of the Typst generator is working and able to generate files which compile with Typst 0.14.2 and the resulting PDFs look decently.
 The following examples work: simple_article, technical_article2, technical_article3.
 I need a processor for ifdef to process technical_article1.
+
+### Status on June 8, 2026
+
+Now that I have implemented the two Micron specs there was a need to fix/improve both the LeanDoc spec and parser. Many things in the
+spec were unclear and the parser had wholes. I now also added a validator and totally refactored the existing code. This was also
+a good opportunity to migrate the spec to LeanDoc itself. Also the Typst generator got many improvements. 
 
 ### Additional Credits
 

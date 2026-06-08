@@ -26,6 +26,7 @@
 #include "LeanDocParser2.h"
 #include "LeanDocTypstGen.h"
 #include "LeanDocAst2.h"
+#include "LeanDocValidator.h"
 
 using namespace LeanDoc;
 
@@ -63,7 +64,8 @@ int main(int argc, char** argv)
     const QStringList args = app.arguments();
     if (args.size() < 2) {
         err << "Usage:\n"
-            << "  leandoc2typst --typst  <in.adoc> -o <out.typ> [--template plain|report] [--template-file tpl.typ]\n";
+            << "  leandoc2typst <in.adoc> -o <out.typ> [--template plain|report] [--template-file tpl.typ]\n"
+            << "  leandoc2typst --ast <in.adoc>\n";
         return 2;
     }
 
@@ -76,7 +78,7 @@ int main(int argc, char** argv)
         if (a == "--ast") {
             modeAst = true;
             modeTypst = false;
-        }else if (a == "-o" && i+1 < args.size())
+        } else if (a == "-o" && i+1 < args.size())
             outPath = args[++i];
         else if (a == "--template" && i+1 < args.size())
             genOpt.templateName = args[++i];
@@ -88,12 +90,8 @@ int main(int argc, char** argv)
             inPath = a;
     }
 
-    if (inPath.isEmpty() || (modeAst + modeTypst) != 1) {
-        err << "Error: choose exactly one mode and provide an input file.\n";
-        return 2;
-    }
-    if (modeTypst && outPath.isEmpty()) {
-        err << "Error: --typst requires -o <out.typ>\n";
+    if (inPath.isEmpty()) {
+        err << "Error: provide an input file.\n";
         return 2;
     }
 
@@ -104,18 +102,28 @@ int main(int argc, char** argv)
     }
 
     Parser parser;
-    ParseError pe;
-    Node* doc = parser.parse(text, &pe);
+    Node* doc = parser.parse(text);
     if (!doc) {
-        err << "Parse error at line " << pe.line << ": " << pe.message << "\n";
+        err << "Parse failed (null result)\n";
         return 1;
     }
 
-    if( modeAst )
-    {
-        QTextStream out(stdout);
-        doc->dump(out,0);
-        return 0;
+    for (int i = 0; i < parser.errors.size(); ++i)
+        err << "Error at line " << parser.errors[i].pos.row << ": " << parser.errors[i].message << "\n";
+
+    // validation pass
+    Validator validator;
+    validator.validate(doc);
+    for (int i = 0; i < validator.diagnostics.size(); ++i) {
+        const Diagnostic& d = validator.diagnostics[i];
+        err << (d.level == Diagnostic::Error ? "Error" : "Warning")
+            << " at line " << d.line << ": " << d.message << "\n";
+    }
+
+    if (modeAst) {
+        doc->dump(out);
+        Node::deleteTree(doc);
+        return parser.errors.isEmpty() ? 0 : 1;
     }
 
     // modeTypst
@@ -140,4 +148,3 @@ int main(int argc, char** argv)
     out << "Wrote " << outPath << "\n";
     return 0;
 }
-

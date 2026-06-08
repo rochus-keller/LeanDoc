@@ -27,20 +27,20 @@
 
 namespace LeanDoc {
 
-struct SourcePos {
-    int line;
-    int column;
-    SourcePos(int l=0,int c=0):line(l),column(c){}
+struct RowCol {
+    enum { ROW_BIT_LEN = 19, COL_BIT_LEN = 32 - ROW_BIT_LEN - 1, MSB = 0x80000000 };
+    uint row : ROW_BIT_LEN; // supports 524k lines
+    uint col : COL_BIT_LEN; // supports 4k chars per line
+    uint unused : 1;
+    RowCol(int l=0,int c=0):row(l),col(c){}
 };
 
 struct BlockMeta {
-    // From BlockMetadata grammar: [[id, text]] + [attrlist] + .Title
     QString anchorId;
-    QString anchorText;     // optional
-    QString title;          // block title line (.Title)
-    QMap<QString, QString> attrs; // parsed from [a=b,c=d] and also options/roles/etc.
-    QList<QString> roles;   // derived convenience: ".role" etc. (still also in attrs)
-
+    QString anchorText;
+    QString title;
+    QMap<QString, QString> attrs;
+    QList<QString> roles;
     BlockMeta() {}
 };
 
@@ -49,68 +49,76 @@ public:
     enum Kind {
         K_Document,
 
-        // Block-level
+        // block-level
         K_Section,
         K_Paragraph,
         K_LiteralParagraph,
         K_AdmonitionParagraph,
-
-        K_DelimitedBlock,        // listing/literal/quote/example/sidebar/open/passthrough/comment/stem
-        K_List,                  // unordered/ordered/description
-        K_ListItem,              // includes checklist state, term/definition, etc.
+        K_DelimitedBlock,
+        K_List,
+        K_ListItem,
         K_Table,
         K_TableRow,
         K_TableCell,
-
-        K_BlockMacro,            // include::, custom::target[]
-        K_Directive,             // ifdef/ifndef/endif (endif represented as part of directive node)
+        K_BlockMacro,
+        K_Directive,
         K_ThematicBreak,
         K_PageBreak,
         K_LineComment,
 
-        // Inline-level
+        // inline-level
         K_Text,
-        K_Space,                 // optional: keep significant whitespace as nodes
-        K_LineBreak,             // " <space>+<EOL>"
-        K_Emph,                  // bold/italic/mono/highlight/underline/etc.
+        K_Space,
+        K_LineBreak,
+        K_Bold,
+        K_Italic,
+        K_Monospace,
+        K_Highlight,
         K_Superscript,
         K_Subscript,
-
-        K_Link,                  // auto url, url[text], email, link:target[text]
-        K_ImageInline,           // image:path[attrs]
-        K_AnchorInline,          // [[id]] or [#id] in inline context
-        K_Xref,                  // <<id,text>> or xref:id[text]
-        K_AttrRef,               // {name} form
-        K_InlineMacro,           // footnote:/latexmath:/custom
-        K_PassthroughInline      // +...+, ++...++, +++...+++
+        K_Link,
+        K_ImageInline,
+        K_AnchorInline,
+        K_Xref,
+        K_AttrRef,
+        K_InlineMacro,
+        K_PassthroughInline
     };
 
-    explicit Node(Kind k) : kind(k), pos(), meta(0) {}
+    enum DelimKind { DK_None, DK_Listing, DK_Literal, DK_Quote,
+                     DK_Example, DK_Sidebar, DK_Open, DK_Comment };
+    enum ListType  { LT_None, LT_Unordered, LT_Ordered, LT_Description };
+    enum CheckState { CS_None, CS_Unchecked, CS_Checked, CS_Intermediate };
+
+    explicit Node(Kind k)
+        : kind(k), pos(), meta(0),
+          level(0), delimKind(DK_None), listType(LT_None), checkState(CS_None) {}
     virtual ~Node() {}
 
     Kind kind;
-    SourcePos pos;
+    RowCol pos;
 
     static const char* nodeKindName(Node::Kind k);
     const char* nodeKindName() const { return nodeKindName(kind); }
     void dump(QTextStream& out, int depth = 0);
 
-    // Block metadata applies to many block kinds; null when not applicable
     BlockMeta* meta;
 
-    // Generic payload; interpretation depends on kind
-    QString text;                  // e.g., paragraph raw, literal content, comment text, etc.
-    QString name;                  // section title, macro name, admonition label, etc.
-    QString target;                // link target, macro target/path, include path
-    QMap<QString, QString> kv;     // attributes for macros/links/cells/options etc.
+    quint8 level;       // section depth (1..6), list marker level, desc term level
+    quint8 delimKind;   // DelimKind for K_DelimitedBlock
+    quint8 listType;    // ListType for K_List
+    quint8 checkState;  // CheckState for K_ListItem
 
-    QList<Node*> children;         // generic children (blocks or inline runs)
+    QString text;       // raw content, literal text
+    QString name;       // section title, macro name, admonition label, term text
+    QString target;     // link/macro target or path
+    QMap<QString, QString> kv; // document header attrs, dynamic attrs
+
+    QList<Node*> children;
     void add(Node* n) { children.append(n); }
 
-    // Convenience for cleanup
     static void deleteTree(Node* n) {
-        if (!n)
-            return;
+        if (!n) return;
         for (int i=0;i<n->children.size();++i)
             deleteTree(n->children[i]);
         delete n->meta;
@@ -119,15 +127,13 @@ public:
 };
 
 struct TableCellSpec {
-    int colspan;    // ColSpan DIGIT+
-    int rowspan;    // RowSpan .DIGIT+
-    QChar align;    // '<' '^' '>'
-    QChar style;    // a,e,h,l,m,s,v
+    int colspan;
+    int rowspan;
+    QChar align;
+    QChar style;
     TableCellSpec():colspan(1),rowspan(1),align(QChar()),style(QChar()){}
 };
 
-
-} // namespace LeanDoc2
+} // namespace LeanDoc
 
 #endif
-

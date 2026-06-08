@@ -31,41 +31,41 @@ struct LineTok {
         T_EOF,
         T_BLANK,
 
-        // metadata lines
+        // metadata
         T_BLOCK_ANCHOR,    // [[id,...]]
-        T_BLOCK_ATTRS,     // [....]
+        T_BLOCK_ATTRS,     // [...]
         T_BLOCK_TITLE,     // .Title
 
         // blocks
-        T_SECTION,         // =..====== ...
-        T_ADMONITION,      // NOTE: ...
-        T_LINE_COMMENT,    // //...
+        T_SECTION,         // =..====== text
+        T_ADMONITION,      // NOTE: text
+        T_LINE_COMMENT,    // //text
 
         // breaks
-        T_THEMATIC,        // ''', ---, ***
-        T_PAGEBREAK,       // <<< ...
+        T_THEMATIC,        // '''
+        T_PAGEBREAK,       // <<<
 
         // lists
-        T_UL_ITEM,         // *..****** ...
-        T_OL_ITEM,         // . .. ... ...
-        T_DESC_TERM,       // term:: (COLON{2,})
+        T_UL_ITEM,         // *..****** text
+        T_OL_ITEM,         // ....... text
+        T_DESC_TERM,       // term::
         T_LIST_CONT,       // +
 
         // delimited
-        T_DELIM_LISTING,       // ----
-        T_DELIM_LITERAL,       // ....
-        T_DELIM_QUOTE,         // ____
-        T_DELIM_EXAMPLE,       // ====
-        T_DELIM_SIDEBAR,       // ****
-        T_DELIM_OPEN,          // --
-        T_DELIM_COMMENT,       // ////
+        T_DELIM_LISTING,   // ----
+        T_DELIM_LITERAL,   // ....
+        T_DELIM_QUOTE,     // ____
+        T_DELIM_EXAMPLE,   // ====
+        T_DELIM_SIDEBAR,   // ****
+        T_DELIM_OPEN,      // --
+        T_DELIM_COMMENT,   // ////
 
         // tables
         T_TABLE_DELIM,     // |===
-        T_TABLE_LINE,      // any line starting with '|'
+        T_TABLE_LINE,      // |...
 
         // block macros & directives
-        T_BLOCK_MACRO,     // image::, include::, ident::...
+        T_BLOCK_MACRO,     // include::...
         T_DIRECTIVE,       // ifdef::, ifndef::, endif::
 
         // otherwise
@@ -76,11 +76,8 @@ struct LineTok {
 
     Kind kind;
     int lineNo;
-    QString raw;      // line without trailing newline
-    int level;        // for section/list markers (1..6)
-    QString head;     // e.g., directive keyword, macro name, admonition label
-    QString rest;     // remainder
-    LineTok():kind(T_EOF),lineNo(0),level(0){}
+    QString raw;
+    LineTok():kind(T_EOF),lineNo(0){}
 };
 
 class Lexer {
@@ -93,19 +90,12 @@ public:
     bool atEnd() const;
 
 private:
-    static bool isBlank(const QString& s);
-    static QString trimLeft(const QString& s);
-    static bool startsWithRun(const QString& s, QChar ch, int minN, int maxN, int* outN);
-    static bool isOnly(const QString& s, const QString& lit);
-
     static LineTok classify(const QString& line, int lineNo);
 
-private:
     QList<LineTok> dtoks;
     int dpos;
 };
 
-} // namespace LeanDoc2
+} // namespace LeanDoc
 
 #endif
-

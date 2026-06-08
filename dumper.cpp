@@ -26,9 +26,9 @@
 #include "LeanDocLexer2.h"
 #include "LeanDocParser2.h"
 #include "LeanDocAst2.h"
+#include "LeanDocValidator.h"
 
 using namespace LeanDoc;
-
 
 static void dumpTokens(const QString& input, QTextStream& out)
 {
@@ -37,18 +37,10 @@ static void dumpTokens(const QString& input, QTextStream& out)
 
     while (!lex.atEnd()) {
         LineTok t = lex.take();
-        out << t.lineNo << ": " << t.kindName();
-        if (t.level)
-            out << " level=" << t.level;
-        if (!t.head.isEmpty())
-            out << " head=\"" << t.head << "\"";
-        if (!t.rest.isEmpty())
-            out << " rest=\"" << t.rest << "\"";
-        out << "\n";
+        out << t.lineNo << ": " << LineTok::kindName(t.kind) << "\n";
     }
-    // EOF token
     LineTok eof = lex.take();
-    out << eof.lineNo << ": " << eof.kindName() << "\n";
+    out << eof.lineNo << ": " << LineTok::kindName(eof.kind) << "\n";
 }
 
 static bool readFileUtf8(const QString& path, QString* outText, QString* outErr)
@@ -109,15 +101,31 @@ int main(int argc, char** argv)
 
     // modeAst
     Parser p;
-    ParseError pe;
-    Node* doc = p.parse(text, &pe);
+    Node* doc = p.parse(text);
     if (!doc) {
-        err << "Parse error at line " << pe.line << ": " << pe.message << "\n";
+        err << "Parse failed (null result)\n";
         return 1;
+    }
+
+    for (int i = 0; i < p.errors.size(); ++i)
+        err << "Error at line " << p.errors[i].pos.row << ": " << p.errors[i].message << "\n";
+
+    // validation pass
+    Validator v;
+    v.validate(doc);
+    for (int i = 0; i < v.diagnostics.size(); ++i) {
+        const Diagnostic& d = v.diagnostics[i];
+        err << (d.level == Diagnostic::Error ? "Error" : "Warning")
+            << " at line " << d.line << ": " << d.message << "\n";
     }
 
     doc->dump(out);
     Node::deleteTree(doc);
-    return 0;
-}
 
+    bool hasErrors = !p.errors.isEmpty();
+    for (int i = 0; i < v.diagnostics.size(); ++i) {
+        if (v.diagnostics[i].level == Diagnostic::Error)
+            hasErrors = true;
+    }
+    return hasErrors ? 1 : 0;
+}

@@ -2,7 +2,7 @@ QT       += core
 
 QT       -= gui
 
-TARGET = LeanDocToTypst
+TARGET = dumper
 CONFIG   += console
 CONFIG   -= app_bundle
 
@@ -12,16 +12,11 @@ HEADERS += \
     LeanDocAst2.h \
     LeanDocLexer2.h \
     LeanDocParser2.h \
-    LeanDocTypstGen.h \
     LeanDocValidator.h
 
 SOURCES += \
-    LeanDoc2Typst.cpp \
     LeanDocAst2.cpp \
     LeanDocLexer2.cpp \
     LeanDocParser2.cpp \
-    LeanDocTypstGen.cpp \
-    LeanDocValidator.cpp
-
-
-
+    LeanDocValidator.cpp \
+    dumper.cpp

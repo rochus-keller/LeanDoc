@@ -1,0 +1,1703 @@
+// This file may be used under the terms of the GNU General Public
+// License (GPL) versions 2.0 or 3.0 as published by the Free Software
+// Foundation, see http://www.gnu.org/copyleft/gpl.html for more information
+
+= LeanDoc: A Semantic Document Language in the Tradition of AsciiDoc
+:toc:
+:numbered:
+
+== Front Matter
+
+=== Version
+
+2026-06-08, work in progress
+
+=== Author
+
+me@rochus-keller.ch
+
+=== License
+
+This file may be used under the terms of the
+GNU General Public License (GPL) versions 2.0 or 3.0 as published by the
+Free Software Foundation, see http://www.gnu.org/copyleft/gpl.html for
+more information.
+
+== Introduction
+
+LeanDoc is a semantic document markup language designed to cover the
+essential subset of AsciiDoc while being parsable by a single recursive
+descent parser. The language prioritizes minimal boilerplate syntax,
+uniform constructs, and ease of learning for the most commonly used
+features.
+
+Each LeanDoc document is a valid AsciiDoc document (but not vice versa).
+
+This specification serves as both a reference for language users and a
+blueprint for parser implementers. It is itself written in LeanDoc.
+
+=== Design Goals
+
+* *Essential AsciiDoc coverage*: The most frequently used AsciiDoc
+  features are supported with identical syntax.
+
+* *Single-pass parsing*: The grammar can be parsed by a single recursive
+  descent parser -- no integrated sub-parsers or substitution phases
+  required.
+
+* *Minimal boilerplate*: Common operations (paragraphs, formatting,
+  lists, links) require the least syntax. Less common features accept
+  proportionally more overhead.
+
+* *Uniform syntax*: Consistent patterns across similar features reduce
+  learning curve. All metadata uses `[...]` brackets, all block
+  delimiters use exactly 4 repeated characters, all inline macros use
+  `name:[content]` or `name:target[attrs]`.
+
+* *Explicit over implicit*: Where AsciiDoc infers context (e.g.,
+  distinguishing block types by style attributes), LeanDoc uses explicit
+  markers to reduce parser complexity.
+
+* *Line-oriented design*: Most constructs begin at line boundaries,
+  enabling efficient parsing where the block type is determined from the
+  first few characters of each line.
+
+== Overview
+
+This section provides a bird's-eye view of LeanDoc. For each concept,
+a brief explanation is given with a pointer to the detailed specification.
+
+=== Document Structure
+
+A LeanDoc document consists of an optional header (title, author,
+revision, document attributes) followed by a body of blocks. The
+body is organized into sections using `=` markers. See
+<<document-structure>> and <<Sections>>.
+
+....
+= Document Title
+Author Name <email@example.org>
+v0.1, 2026-06-08
+:toc:
+
+== Chapter One
+
+Paragraph text here.
+
+=== Section 1.1
+
+More text.
+....
+
+=== Text and Paragraphs
+
+The most basic content is the paragraph: consecutive non-blank lines,
+separated from other blocks by blank lines. Line breaks within a
+paragraph are normalized to spaces. For preformatted text, indent
+lines with at least one space. See <<Paragraphs>>.
+
+=== Inline Formatting
+
+Text can be formatted inline using delimiter characters:
+
+* `\*bold*` for *bold*, `\_italic_` for _italic_, and +
+  `++`++mono++`++` for monospace
+* `\^super^` for superscript, `\~sub~` for subscript
+* `\#highlight#` for highlighted text
+
+For formatting within a word (e.g., making only the first letter bold),
+use doubled delimiters: `\**B**old` produces **B**old. See <<inline-formatting>>.
+
+=== Lists
+
+LeanDoc supports three list types:
+
+* *Unordered lists* using `*` markers (nest with `**`, `***`, etc.)
+* *Ordered lists* using `.` markers (nest with `..`, `...`, etc.)
+* *Description lists* using `term::` syntax
+
+Additional blocks can be attached to list items with the `+`
+continuation marker. See <<Lists>>.
+
+=== Delimited Blocks
+
+Blocks of content can be set apart using delimiter lines of exactly 4
+repeated characters:
+
+* `----` for listing/code blocks (verbatim, monospace)
+* `....` for literal blocks (verbatim, preserves whitespace)
+* `====` for example blocks (rendered with distinct styling)
+* `____` for quote blocks (with optional attribution)
+* `****` for sidebar blocks (supplementary content)
+* `////` for comment blocks (hidden from output)
+
+An open block uses `--` (2 dashes) as a generic container. See
+<<delimited-blocks>>.
+
+=== Tables
+
+Tables use `|===` delimiters and `|` cell separators. Column widths,
+alignment, and header rows can be specified via attributes. See
+<<Tables>>.
+
+=== Links and Cross-References
+
+URLs are auto-linked. Custom link text is added with `[text]` after the
+URL. Internal cross-references use `\<<anchorid>>` to link to anchors
+defined with `[[anchorid]]`. See <<links-and-cross-references>>.
+
+=== Images
+
+Images use `image:path[alt text]` syntax. For a standalone image, place
+it as the sole content of a paragraph. For inline images, embed them
+within text. There is no separate block image macro -- this simplification
+avoids redundancy. See <<Images>>.
+
+=== Math
+
+Mathematical formulas use `latexmath:[...]` syntax for both inline and
+block-level equations. Block-level formulas are simply paragraphs
+containing only a `latexmath:` expression. See <<mathematical-content>>.
+
+=== Includes and Conditionals
+
+Content from external files can be included with `include::file[]`.
+Conditional inclusion of content uses `ifdef::attr[]...endif::[]`.
+See <<include-directive>> and <<preprocessor-directives>>.
+
+=== Metadata and Attributes
+
+Every block can be preceded by metadata: a block ID (`[[id]]`), a
+role (`[.role]`), options (`[options="..."]`), or a title (`.Title`).
+Document attributes (`:name: value`) serve as variables referenced
+with `{name}`. See <<block-metadata>> and <<Attributes>>.
+
+== Design Principles
+
+[[principle-line-oriented]]
+=== Principle 1: Line-Oriented Parsing
+
+Most constructs begin at line boundaries. The parser can determine the
+block type from the first few characters of a line without lookahead
+beyond the current line start. Blank lines serve as block separators.
+
+This means: when the parser reads a new line, it checks the first 1-6
+characters to decide what kind of block it is (section heading, list
+item, delimiter, etc.) and then processes the rest of the line
+accordingly. See <<line-start-decision-table>> for the complete mapping.
+
+[[principle-contextual]]
+=== Principle 2: Contextual Blocks
+
+Block delimiters use context-sensitive markers that change meaning based
+on position (line start vs. inline). For example, `*` at the start of a
+line begins a list item, while `*` within text marks bold formatting.
+This eliminates ambiguity without complex lookahead.
+
+=== Principle 3: Uniform Attribute Syntax
+
+All metadata (IDs, roles, options) uses a single bracket notation
+`[...]` with consistent parsing rules across block and inline contexts.
+This reduces the number of syntactic patterns a user must learn.
+
+=== Principle 4: Explicit Over Implicit
+
+Where AsciiDoc infers context (e.g., distinguishing quote blocks from
+other blocks by style attributes), LeanDoc uses explicit markers or
+attributes. This makes parsing deterministic and reduces "surprise
+renderings" where content is unexpectedly interpreted differently than
+intended.
+
+=== Principle 5: Frequency-Weighted Syntax
+
+The most common features (paragraphs, basic formatting, lists, links)
+require minimal syntax. Less common features (conditional compilation,
+complex tables) accept higher syntax overhead. This follows the
+observation that in real-world technical documents, a small set of
+features accounts for the vast majority of markup.
+
+== Lexical Structure
+
+=== Character Classes
+
+....
+(* Basic character classes *)
+ALPHA        = "a".."z" | "A".."Z" ;
+DIGIT        = "0".."9" ;
+WHITESPACE   = " " | "\t" ;
+NEWLINE      = "\n" | "\r\n" | "\r" ;
+ANY_CHAR     = ? any Unicode character ? ;
+
+(* Line-level tokens *)
+LINE_START   = ? start of line position ? ;
+LINE_END     = NEWLINE | EOF ;
+BLANK_LINE   = WHITESPACE* LINE_END ;
+EOF          = ? end of file ? ;
+
+(* Delimiter characters *)
+EQUALS       = "=" ;
+DASH         = "-" ;
+STAR         = "*" ;
+DOT          = "." ;
+COLON        = ":" ;
+PIPE         = "|" ;
+SLASH        = "/" ;
+PLUS         = "+" ;
+TILDE        = "~" ;
+BACKTICK     = "`" ;
+BRACKET_OPEN = "[" ;
+BRACKET_CLOSE= "]" ;
+ANGLE_OPEN   = "<" ;
+ANGLE_CLOSE  = ">" ;
+HASH         = "#" ;
+UNDERSCORE   = "_" ;
+CARET        = "^" ;
+BACKSLASH    = "\\" ;
+BRACE_OPEN   = "{" ;
+BRACE_CLOSE  = "}" ;
+....
+
+=== Lexical Tokens
+
+....
+(* Identifiers *)
+IDENTIFIER = ( ALPHA | "_" ) ( ALPHA | DIGIT | "_" | "-" )* ;
+
+(* Strings *)
+STRING_LITERAL = '"' ( ANY_CHAR - '"' | '\"' )* '"' ;
+
+(* Escape: backslash before any markup character produces a literal *)
+ESCAPED_CHAR = BACKSLASH
+               ( STAR | UNDERSCORE | BACKTICK | CARET | TILDE
+               | HASH | BRACKET_OPEN | BRACKET_CLOSE | BRACE_OPEN
+               | BRACE_CLOSE | ANGLE_OPEN | ANGLE_CLOSE | BACKSLASH
+               | PLUS | DOT | COLON | PIPE ) ;
+....
+
+NOTE: The escape mechanism is deliberately simple and predictable:
+a backslash before any markup-significant character always produces that
+character literally. Unlike AsciiDoc where the set of escapable
+characters depends on context, in LeanDoc the rule is uniform.
+
+== Grammar Specification (EBNF)
+
+[[document-structure]]
+=== Document Structure
+
+....
+Document       = [ DocumentHeader ] DocumentBody ;
+
+DocumentHeader = DocumentTitle
+                 [ AuthorLine ]
+                 [ RevisionLine ]
+                 AttributeLine* ;
+
+DocumentTitle  = LINE_START EQUALS WHITESPACE+ InlineContent LINE_END ;
+
+AuthorLine     = LINE_START IDENTIFIER ( WHITESPACE+ IDENTIFIER )*
+                 [ WHITESPACE+ "<" EMAIL ">" ] LINE_END ;
+
+EMAIL          = IDENTIFIER "@" IDENTIFIER ( "." IDENTIFIER )+ ;
+
+RevisionLine   = LINE_START "v" VERSION_NUMBER
+                 [ "," WHITESPACE* DATE ] LINE_END ;
+
+VERSION_NUMBER = DIGIT+ ( "." DIGIT+ )* ;
+DATE           = DIGIT DIGIT DIGIT DIGIT "-" DIGIT DIGIT "-" DIGIT DIGIT ;
+
+AttributeLine  = LINE_START COLON IDENTIFIER COLON
+                 [ WHITESPACE+ AttributeValue ] LINE_END ;
+
+AttributeValue = ( ANY_CHAR - NEWLINE )+ ;
+
+DocumentBody   = ( Block | BLANK_LINE )* ;
+....
+
+The document title is the only level-0 heading. It uses a single `=`
+followed by space and the title text. Author and revision lines
+immediately follow the title. Attribute lines (`:name: value`) set
+document-level variables that can be referenced later with `{name}`.
+
+=== Blocks
+
+....
+Block = [ BlockMetadata ]
+        ( Section
+        | AdmonitionParagraph
+        | Paragraph
+        | DelimitedBlock
+        | List
+        | Table
+        | BlockMacro
+        | ConditionalDirective
+        | ThematicBreak
+        | Comment ) ;
+
+BlockMetadata = [ BlockAnchor ]
+                [ BlockAttributes ]
+                [ BlockTitle ] ;
+
+BlockAnchor     = LINE_START "[[" IDENTIFIER
+                  [ "," WHITESPACE* InlineContent ] "]]" LINE_END ;
+
+BlockAttributes = LINE_START "[" AttributeList "]" LINE_END ;
+
+AttributeList   = [ AttributeEntry { "," WHITESPACE* AttributeEntry } ] ;
+
+AttributeEntry  = ( "#" IDENTIFIER )
+                | ( "." IDENTIFIER )
+                | ( "%" IDENTIFIER )
+                | ( IDENTIFIER [ "=" ( IDENTIFIER | STRING_LITERAL ) ] ) ;
+
+BlockTitle      = LINE_START "." ( ALPHA | DIGIT | UNDERSCORE )
+                  ( ANY_CHAR - NEWLINE )* LINE_END ;
+....
+
+Every block can optionally be preceded by metadata: an anchor for
+cross-referencing, attributes for styling/behavior, and a title for
+captioning. The `BlockTitle` rule requires that the character after the
+leading dot is non-whitespace -- this is how the parser distinguishes
+a block title (`.Title text`) from an ordered list item (`. item text`
+-- dot followed by space). See <<block-title-vs-ordered-list>>.
+
+The `AttributeEntry` rule supports shorthand notations from AsciiDoc:
+`#id` for block ID, `.role` for CSS class, and `%option` for options.
+The general form `name=value` covers all other attributes.
+
+[[Sections]]
+=== Sections
+
+....
+Section      = SectionTitle SectionBody ;
+
+SectionTitle = LINE_START EQUALS{2..6} WHITESPACE+ InlineContent LINE_END ;
+
+SectionBody  = ( Block | BLANK_LINE )* ;
+....
+
+Sections form the document hierarchy. The number of `=` signs determines
+the nesting level: `==` is level 1 (chapter), `===` is level 2, down to
+`======` at level 5. Section titles automatically become anchors for
+cross-referencing (the anchor ID is derived from the title text by
+lowercasing, replacing spaces with hyphens, and removing special
+characters).
+
+A section's body extends until the next section of the same or higher
+level, or the end of the document.
+
+[[Paragraphs]]
+=== Paragraphs
+
+....
+Paragraph        = LiteralParagraph | NormalParagraph ;
+
+NormalParagraph  = ParagraphLine+ ;
+
+ParagraphLine    = LINE_START InlineContent LINE_END ;
+
+LiteralParagraph = LINE_START WHITESPACE+ ( ANY_CHAR - NEWLINE )+
+                   LINE_END
+                   ( LINE_START WHITESPACE+ ( ANY_CHAR - NEWLINE )+
+                     LINE_END )* ;
+
+AdmonitionParagraph = LINE_START AdmonitionLabel COLON
+                      WHITESPACE+ InlineContent LINE_END
+                      ( LINE_START WHITESPACE+ InlineContent
+                        LINE_END )* ;
+
+AdmonitionLabel  = "NOTE" | "TIP" | "IMPORTANT" | "CAUTION" | "WARNING" ;
+....
+
+A normal paragraph is the default block type: consecutive non-blank
+lines whose content is rendered as flowing text (line breaks become
+spaces).
+
+A literal paragraph is any line indented by at least one space. It
+preserves spacing and line breaks exactly. This is handy for short
+code snippets without the overhead of a delimited block.
+
+Admonition paragraphs begin with a label like `NOTE:` and call out
+special information. The label must be uppercase. An admonition paragraph
+can span multiple lines if continuation lines are indented. For
+multi-paragraph admonitions, use a delimited block with an admonition
+attribute instead (see <<admonition-blocks>>).
+
+[[delimited-blocks]]
+=== Delimited Blocks
+
+....
+DelimitedBlock = ListingBlock
+               | LiteralBlock
+               | QuoteBlock
+               | ExampleBlock
+               | SidebarBlock
+               | OpenBlock
+               | CommentBlock ;
+
+ListingBlock   = LINE_START DASH{4} LINE_END
+                 VerbatimContent
+                 LINE_START DASH{4} LINE_END ;
+
+LiteralBlock   = LINE_START DOT{4} LINE_END
+                 VerbatimContent
+                 LINE_START DOT{4} LINE_END ;
+
+QuoteBlock     = LINE_START UNDERSCORE{4} LINE_END
+                 BlockContent
+                 LINE_START UNDERSCORE{4} LINE_END ;
+
+ExampleBlock   = LINE_START EQUALS{4} LINE_END
+                 BlockContent
+                 LINE_START EQUALS{4} LINE_END ;
+
+SidebarBlock   = LINE_START STAR{4} LINE_END
+                 BlockContent
+                 LINE_START STAR{4} LINE_END ;
+
+OpenBlock      = LINE_START DASH{2} LINE_END
+                 BlockContent
+                 LINE_START DASH{2} LINE_END ;
+
+CommentBlock   = LINE_START SLASH{4} LINE_END
+                 ( ANY_CHAR - ( LINE_START SLASH{4} LINE_END ) )*
+                 LINE_START SLASH{4} LINE_END ;
+
+BlockContent   = ( Paragraph | List | Table | DelimitedBlock
+                 | BLANK_LINE )* ;
+
+VerbatimContent = ( ( ANY_CHAR - NEWLINE )* LINE_END )* ;
+....
+
+All delimited blocks use exactly 4 repeated characters as their opening
+and closing delimiter (except the open block which uses exactly 2
+dashes). This fixed length is a deliberate difference from AsciiDoc
+(which allows 4 or more) -- it simplifies the lexer and creates clear
+"hemming distance" between delimiter types.
+
+The blocks divide into two categories:
+
+* *Verbatim blocks* (listing, literal): Content is preserved exactly as
+  written, with no inline formatting applied. Use these for code, command
+  output, and preformatted text.
+
+* *Content blocks* (quote, example, sidebar, open): Content is parsed
+  normally and can contain paragraphs, lists, tables, and nested blocks.
+
+The *open block* (`--`) is a generic container. It takes the semantic
+role of its preceding attribute. For example, `[source]` before an open
+block makes it behave as a source code block.
+
+Comment blocks (`////`) are completely hidden from output. They are
+useful for leaving notes to other authors.
+
+==== Source Code Blocks
+
+A listing block with a `[source,language]` attribute enables syntax
+highlighting:
+
+....
+[source,python]
+----
+def factorial(n):
+    return 1 if n == 0 else n * factorial(n-1)
+----
+....
+
+The language name is passed to the syntax highlighter. This is the most
+common use of the listing block.
+
+[[admonition-blocks]]
+==== Admonition Blocks
+
+For multi-paragraph admonitions, use an admonition attribute before any
+delimited block:
+
+....
+[IMPORTANT]
+====
+This is a complex admonition with:
+
+* Multiple paragraphs
+* Lists
+* Other nested content
+====
+....
+
+The admonition label (`NOTE`, `TIP`, `IMPORTANT`, `CAUTION`, `WARNING`)
+in the attribute list is uppercase. This complements the single-line
+admonition paragraph syntax (`NOTE: text`).
+
+[[Lists]]
+=== Lists
+
+....
+List = UnorderedList | OrderedList | DescriptionList ;
+
+UnorderedList     = UnorderedListItem+ ;
+
+UnorderedListItem = LINE_START STAR{1..6} WHITESPACE+
+                    InlineContent LINE_END
+                    ListItemContinuation* ;
+
+OrderedList       = OrderedListItem+ ;
+
+OrderedListItem   = LINE_START DOT{1..6} WHITESPACE+
+                    InlineContent LINE_END
+                    ListItemContinuation* ;
+
+DescriptionList      = DescriptionListEntry+ ;
+
+DescriptionListEntry = DescriptionTerm DescriptionDefinition ;
+
+DescriptionTerm      = LINE_START InlineContent COLON{2..4} LINE_END ;
+
+DescriptionDefinition = [ LINE_START InlineContent LINE_END ]
+                        ListItemContinuation* ;
+
+ListItemContinuation = LINE_START PLUS LINE_END
+                       ( Paragraph | DelimitedBlock ) ;
+....
+
+*Unordered lists* use `*` markers. The nesting level is determined by
+the number of asterisks: `*` for level 1, `**` for level 2, up to
+`******` for level 6. In practice, 2-3 levels suffice for most
+documents.
+
+*Ordered lists* use `.` markers with the same nesting scheme: `.` for
+level 1, `..` for level 2, etc. Numbering is automatic.
+
+*Description lists* (also called definition lists) use `term::` syntax.
+The number of colons determines nesting depth: `::` for level 1, `:::`
+for level 2, `::::` for level 3. The definition follows on the same
+line or on the next line.
+
+==== List Continuation
+
+A `+` on a line by itself attaches the following paragraph or delimited
+block to the current list item. Multiple continuations can be chained:
+
+....
+* List item with additional content
++
+This paragraph is part of the list item.
++
+----
+Code block also attached to the list item.
+----
+
+* Next list item
+....
+
+The continuation marker `+` must appear on its own line between the
+list item content and the block to be attached.
+
+==== Checklist Items
+
+Unordered list items can include checkboxes:
+
+....
+* [*] Completed task
+* [x] Also completed
+* [ ] Not yet done
+* Regular list item
+....
+
+The checkbox syntax `[*]`, `[x]`, or `[ ]` follows the `*` marker and
+space.
+
+[[Tables]]
+=== Tables
+
+....
+Table = LINE_START PIPE EQUALS{3} LINE_END
+        TableContent
+        LINE_START PIPE EQUALS{3} LINE_END ;
+
+TableContent = ( TableRow | BLANK_LINE )* ;
+
+TableRow     = LINE_START ( PIPE TableCell )+ LINE_END ;
+
+TableCell    = [ CellSpec ] InlineContent ;
+
+CellSpec     = [ ColSpan "+" ] [ Alignment ] ;
+
+ColSpan      = DIGIT+ ;
+
+Alignment    = "<" | "^" | ">" ;
+....
+
+Tables open and close with `|===`. Each cell is separated by `|`.
+The first row is promoted to a header row if followed by a blank line.
+
+Table behavior is controlled by attributes placed before the `|===`
+delimiter:
+
+* `[cols="1,2,3"]` -- defines column count and relative widths
+* `[cols="<,^,>"]` -- defines column alignment (left, center, right)
+* `[options="header"]` -- explicitly marks the first row as a header
+
+Cell-level formatting uses a prefix before `|`:
+
+* `2+|` -- cell spans 2 columns
+* `.2+|` -- cell spans 2 rows
+* `<|`, `^|`, `>|` -- cell alignment override (left, center, right)
+
+NOTE: LeanDoc does not support `width` or other presentation-level
+table attributes. Table width is determined by the rendering backend.
+This reflects LeanDoc's focus on logical/semantic markup rather than
+visual presentation.
+
+[[inline-formatting]]
+=== Inline Formatting
+
+....
+InlineContent = ( InlineElement | ESCAPED_CHAR
+               | ( ANY_CHAR - NEWLINE ) )* ;
+
+InlineElement = Bold | Italic | Monospace
+              | UnconstrainedBold | UnconstrainedItalic
+              | UnconstrainedMonospace
+              | Superscript | Subscript | Highlight
+              | CustomRole
+              | Link | Image
+              | InlineAnchor | CrossReference
+              | AttributeReference
+              | InlineMacro | LatexMath
+              | IndexTerm
+              | LineBreak ;
+
+(* Constrained formatting: requires word boundaries *)
+Bold     = STAR InlineContent STAR ;
+Italic   = UNDERSCORE InlineContent UNDERSCORE ;
+Monospace = BACKTICK VerbatimRun BACKTICK ;
+
+(* Unconstrained formatting: works anywhere, even mid-word *)
+UnconstrainedBold     = STAR{2} InlineContent STAR{2} ;
+UnconstrainedItalic   = UNDERSCORE{2} InlineContent UNDERSCORE{2} ;
+UnconstrainedMonospace = BACKTICK{2} VerbatimRun BACKTICK{2} ;
+
+(* These use plain text only -- no nested formatting *)
+Superscript = CARET ( ANY_CHAR - ( CARET | NEWLINE ) )+ CARET ;
+Subscript   = TILDE ( ANY_CHAR - ( TILDE | NEWLINE ) )+ TILDE ;
+Highlight   = HASH ( ANY_CHAR - ( HASH | NEWLINE ) )+ HASH ;
+
+CustomRole  = "[" "." IDENTIFIER "]" HASH InlineContent HASH ;
+
+AttributeReference = BRACE_OPEN IDENTIFIER BRACE_CLOSE ;
+
+IndexTerm = "(((" ( ANY_CHAR - ( ")" | NEWLINE ) )+ ")))" 
+          | "((" ( ANY_CHAR - ( ")" | NEWLINE ) )+ "))" ;
+
+LineBreak = WHITESPACE PLUS LINE_END ;
+
+VerbatimRun = ( ANY_CHAR - ( BACKTICK | NEWLINE ) )+ ;
+....
+
+==== Constrained vs. Unconstrained
+
+LeanDoc distinguishes two forms of inline formatting:
+
+* *Constrained* (single delimiter: `*bold*`, `_italic_`): Requires
+  word boundaries -- the opening delimiter must be preceded by whitespace
+  or start of line, and the closing delimiter must be followed by
+  whitespace, punctuation, or end of line.
+
+* *Unconstrained* (double delimiter: `**bold**`, `__italic__`): Works
+  anywhere, including mid-word. Use `**B**old` to format just the "B".
+
+This distinction exists because single `*` and `_` appear frequently in
+regular text (e.g., multiplication, file paths). The word boundary rule
+prevents false matches, while doubled delimiters provide an unambiguous
+alternative for mid-word formatting.
+
+==== Nesting
+
+Different formatting types can nest inside each other. For example,
+`*_bold and italic_*` produces *_bold and italic_* text. The parser
+resolves nesting greedily left-to-right: the first matching closing
+delimiter ends the span.
+
+The same formatting type cannot nest within itself (e.g., `*bold *nested*
+bold*` is not valid). This keeps parsing deterministic.
+
+Monospace (`++`++text++`++`), superscript (`^text^`), subscript (`~text~`), and
+highlight (`#text#`) do not permit nested formatting -- their content is
+treated as plain text. This reflects their typical use for short,
+literal spans.
+
+==== Smart Quotes
+
+Backtick-quote combinations produce typographic (curly) quotes:
+
+* ++"`++ and ++`"++ produce left and right double quotes
+* ++'`++ and ++`'++ produce left and right single quotes
+
+==== Line Breaks
+
+A space followed by `+` at end of line forces a hard line break without
+starting a new paragraph:
+
+....
+First line +
+Second line +
+Third line
+....
+
+[[links-and-cross-references]]
+=== Links and Cross-References
+
+....
+Link = URLAutoLink | URLWithText | EmailLink ;
+
+URLAutoLink = URL_SCHEME URL_PATH ;
+URL_SCHEME  = ( "http" | "https" | "ftp" | "irc" | "mailto" ) ":" ;
+URL_PATH    = ( ANY_CHAR - ( WHITESPACE | NEWLINE | "[" | "]" ) )+ ;
+
+URLWithText = URL_SCHEME URL_PATH "[" InlineContent
+              [ "," AttributeEntry { "," AttributeEntry } ] "]" ;
+
+EmailLink   = IDENTIFIER "@" IDENTIFIER ( "." IDENTIFIER )+ ;
+
+InlineAnchor   = "[[" IDENTIFIER [ "," InlineContent ] "]]"
+               | "[" "#" IDENTIFIER "]" ;
+
+CrossReference = "<<" IDENTIFIER [ "," InlineContent ] ">>"
+               | "xref:" IDENTIFIER "[" [ InlineContent ] "]" ;
+....
+
+*URL auto-linking*: Bare URLs starting with a known scheme are
+automatically converted to clickable links.
+
+*URL with text*: Appending `[text]` to a URL provides custom link text.
+Additional attributes (roles, target window) can be added after a comma.
+The shorthand `^` at the end of link text (e.g., `https://example.org[text^]`)
+opens the link in a new window.
+
+*Email links*: Email addresses are auto-linked. Use
+`mailto:user@example.org[Contact]` for custom text.
+
+*Anchors*: `\[[id]]` defines a target for cross-referencing. Place it
+before any block. Section headings also generate automatic anchors from
+their text.
+
+*Cross-references*: `\<<id>>` links to an anchor within the same
+document. `\<<id, display text>>` provides custom display text.
+The `xref:` macro form supports inter-document references:
+`xref:other-doc.adoc#section[text]`.
+
+[[Images]]
+=== Images
+
+....
+Image      = "image:" ImagePath "[" [ ImageAttributes ] "]" ;
+
+ImagePath  = ( ANY_CHAR - ( "[" | "]" | WHITESPACE ) )+ ;
+
+ImageAttributes = [ InlineContent ]
+                  { "," AttributeEntry } ;
+....
+
+Images use the `image:` macro (with a single colon). The first
+positional attribute is alt text, followed by optional width and height:
+
+....
+image:photo.jpg[A sunset,400,300]
+....
+
+For a *block-level image* (standalone, centered, with optional caption),
+place the image as the sole content of a paragraph, optionally preceded
+by a block title:
+
+....
+.Figure 1: System Architecture
+image:architecture.png[System architecture diagram]
+....
+
+For an *inline image* (flowing with text), embed the image macro within
+a paragraph alongside other text:
+
+....
+Click the image:icon-save.png[Save] button to continue.
+....
+
+NOTE: LeanDoc does not have a separate `image::` (double-colon) block
+macro. The single `image:` syntax handles both cases. This eliminates
+the redundancy of having two image syntaxes and simplifies the grammar.
+
+[[mathematical-content]]
+=== Mathematical Content
+
+....
+LatexMath      = "latexmath:" "[" MathExpression "]" ;
+
+MathExpression = ( ANY_CHAR - "]" | "\\]" )* ;
+....
+
+Mathematical formulas use LaTeX notation via the `latexmath:` macro.
+The content between brackets is passed directly to a LaTeX renderer.
+A literal `]` inside the expression must be escaped as `\]`.
+
+For *inline math*, embed the macro within text:
+
+....
+The formula latexmath:[E = mc^2] is well known.
+....
+
+For *block-level equations*, place the `latexmath:` macro as the sole
+content of a paragraph. It can be given an anchor for cross-referencing:
+
+....
+[[pythagorean]]
+latexmath:[a^2 + b^2 = c^2]
+
+As seen in <<pythagorean>>...
+....
+
+NOTE: LeanDoc does not support AsciiDoc's generic `stem:` macro. The
+`latexmath:` macro is used directly for all mathematical content. This
+avoids the indirection of setting `:stem: latexmath` as a document
+attribute and then using `stem:` everywhere.
+
+=== Block Macros
+
+....
+BlockMacro    = IncludeMacro | CustomBlockMacro ;
+
+IncludeMacro  = LINE_START "include::" IncludePath
+                "[" [ IncludeAttributes ] "]" LINE_END ;
+
+IncludePath   = ( ANY_CHAR - ( "[" | "]" ) )+ ;
+
+IncludeAttributes = AttributeEntry { "," WHITESPACE* AttributeEntry } ;
+
+CustomBlockMacro = LINE_START IDENTIFIER "::" MacroTarget
+                   "[" [ MacroAttributes ] "]" LINE_END ;
+
+MacroTarget   = ( ANY_CHAR - ( "[" | "]" ) )+ ;
+
+MacroAttributes = InlineContent { "," WHITESPACE* InlineContent } ;
+....
+
+[[include-directive]]
+==== Include Directive
+
+The `include::` macro inserts content from an external file at the
+current position. It supports tag-based and line-range selection:
+
+....
+include::chapter1.adoc[]
+
+include::examples.java[tag=main-method]
+
+include::data.txt[lines=5..10]
+....
+
+Tag selection works with tag markers in the included file:
+`// tag::name[]` and `// end::name[]`.
+
+This is essential for large documents (books, multi-file specifications)
+where content is split across files.
+
+[[preprocessor-directives]]
+=== Preprocessor Directives
+
+....
+ConditionalDirective = IfdefDirective | IfndefDirective ;
+
+IfdefDirective  = LINE_START "ifdef::" AttributeCondition
+                  "[" [ InlineContent ] "]" LINE_END
+                  [ DocumentBody ]
+                  LINE_START "endif::" [ AttributeCondition ]
+                  "[" "]" LINE_END ;
+
+IfndefDirective = LINE_START "ifndef::" AttributeCondition
+                  "[" [ InlineContent ] "]" LINE_END
+                  [ DocumentBody ]
+                  LINE_START "endif::" [ AttributeCondition ]
+                  "[" "]" LINE_END ;
+
+AttributeCondition = IDENTIFIER { "," IDENTIFIER } ;
+....
+
+Conditional directives include or exclude content based on whether
+document attributes are defined. This is useful for producing different
+outputs from the same source (e.g., HTML vs. PDF, public vs. internal).
+
+`ifdef::attr[]` includes the following content only if `attr` is defined.
+`ifndef::attr[]` includes it only if `attr` is _not_ defined.
+
+Multiple attributes can be tested with OR logic:
+`ifdef::html,pdf[]` includes content if _either_ `html` or `pdf` is defined.
+
+For AND logic, nest `ifdef` directives:
+
+....
+ifdef::html[]
+ifdef::draft[]
+Content for HTML draft only.
+endif::[]
+endif::[]
+....
+
+NOTE: LeanDoc does not support `ifeval::` (expression evaluation in
+conditions). Boolean attribute testing covers the vast majority of
+conditional inclusion needs, and `ifeval` would require an expression
+evaluator in the parser, violating the single-pass design goal.
+
+=== Inline Macros
+
+....
+InlineMacro = MacroName COLON MacroTarget "[" [ MacroAttributes ] "]"
+            | MacroName COLON "[" [ MacroAttributes ] "]" ;
+
+MacroName   = "footnote" | IDENTIFIER ;
+....
+
+==== Footnote Macro
+
+Footnotes use `footnote:[text]` for a new footnote, or
+`footnote:id[text]` to define a reusable footnote that can be
+referenced again with `footnote:id[]`:
+
+....
+This needs clarification.footnote:[Additional details here.]
+
+First reference.footnote:disclaimer[Opinions are my own.]
+Second reference.footnote:disclaimer[]
+....
+
+==== Index Term Macros
+
+Index entries are marked with `((term))` for a visible term (the term
+appears in text and is added to the index) or `(((term)))` for a hidden
+index entry (added to index but not visible in text):
+
+....
+The ((parser)) analyzes syntax.
+(((recursive descent))) This technique is widely used.
+....
+
+=== Comments
+
+....
+Comment     = LineComment | CommentBlock ;
+
+LineComment = LINE_START SLASH{2} ( ANY_CHAR - NEWLINE )* LINE_END ;
+....
+
+Line comments start with `//` and extend to end of line. Comment blocks
+use `////` delimiters (see <<delimited-blocks>>). Neither appears in
+output.
+
+=== Thematic Break
+
+....
+ThematicBreak = LINE_START "'''" LINE_END ;
+....
+
+A thematic break (horizontal rule) is produced by three single-quote
+characters on a line by themselves. It visually separates sections of
+content.
+
+NOTE: LeanDoc uses only `'''` for thematic breaks. AsciiDoc also
+accepts `---` and `***`, but LeanDoc omits these to avoid visual
+confusion with the open block delimiter (`--`), listing block delimiter
+(`----`), list marker (`*`), and sidebar delimiter (`****`).
+
+[[block-metadata]]
+=== Block Metadata
+
+==== Block ID
+
+`\[[id]]` or `[#id]` before a block assigns a unique identifier for
+cross-referencing:
+
+....
+[[important-note]]
+NOTE: This is an important note.
+
+See <<important-note>> for details.
+....
+
+==== Block Role
+
+`[.role-name]` or `[role="role-name"]` applies a CSS class or semantic
+role to the following block:
+
+....
+[.lead]
+This is introductory text with special emphasis.
+....
+
+==== Block Options
+
+`[options="opt1,opt2"]` or `[%opt]` controls block behavior:
+
+....
+[options="header"]
+|===
+|Name |Age
+|Alice |30
+|===
+....
+
+==== Block Title
+
+`.Title text` adds a caption to the following block. The dot must be
+immediately followed by a non-whitespace character:
+
+....
+.Listing 1: Hello World
+----
+print("Hello, world!")
+----
+....
+
+[[block-title-vs-ordered-list]]
+===== Block Title vs. Ordered List
+
+A line starting with `.` is a block title if the next character is
+non-whitespace, and an ordered list item if the next character is a
+space:
+
+* `.Title text` -- block title (dot + non-whitespace)
+* `. Item text` -- ordered list item (dot + space)
+
+This distinction is unambiguous at the first two characters of the line.
+
+[[Attributes]]
+=== Attributes and Substitutions
+
+==== Document Attributes
+
+Document attributes are set with `:name: value` and referenced with
+`{name}`:
+
+....
+:product: LeanDoc Parser
+:version: 0.1
+
+Welcome to {product} version {version}!
+....
+
+Attributes can be set in the document header or anywhere in the body.
+An attribute can be unset by omitting the value: `:name:` defines the
+attribute (useful for `ifdef` tests), while `:name!:` unsets it.
+
+==== Text Replacements
+
+LeanDoc automatically converts common character sequences to their
+typographic equivalents:
+
+* `(C)` to (C) (copyright)
+* `(R)` to (R) (registered)
+* `(TM)` to (TM) (trademark)
+* `\->` to -> (right arrow)
+* `\=>` to => (double right arrow)
+* `\<-` to <- (left arrow)
+* `\...` to ... (ellipsis)
+* `--` within text to -- (em dash, only when surrounded by spaces
+  or at word boundaries -- not at line start where `--` is an open
+  block delimiter)
+
+==== Escape Mechanism
+
+A backslash `\` before any markup-significant character prevents it
+from being interpreted as markup:
+
+....
+\*Not bold\*
+\{not-an-attribute}
+\<<not-a-reference>>
+....
+
+The rule is simple and uniform: `\` + any character from the set
+`* _ ` ^ ~ # [ ] { } < > \ + . : |` produces that character literally.
+
+NOTE: This is simpler than AsciiDoc's escaping rules, where the
+behavior depends on context. In LeanDoc, the backslash escape always
+works the same way. When in doubt about whether a character will be
+interpreted as markup, escape it.
+
+=== Special Sections
+
+Special sections are normal sections with a semantic role attribute:
+
+....
+[bibliography]
+== References
+
+* [[[taoup]]] Eric S. Raymond. The Art of Unix Programming.
+  Addison-Wesley, 2003.
+* [[[gof]]] Gamma et al. Design Patterns. Addison-Wesley, 1994.
+
+In text: See <<taoup>> for details.
+....
+
+The following roles are supported:
+
+* `[bibliography]` -- bibliographic references (entries use
+  `[[[id]]] text` syntax)
+* `[glossary]` -- term definitions (use description list format)
+* `[index]` -- auto-generated index
+* `[abstract]` -- document abstract or summary
+* `[appendix]` -- appendix (numbered A, B, C...)
+
+== Differences from AsciiDoc
+
+LeanDoc is a subset of AsciiDoc with some deliberate restrictions.
+Every LeanDoc document is a valid AsciiDoc document, but not vice versa.
+This section lists the key differences.
+
+=== Syntactic Restrictions
+
+* *Fixed delimiter length*: Block delimiters are exactly 4 characters
+  (e.g., `----`, not `------`). AsciiDoc allows 4 or more. This
+  simplifies lexing and creates clear visual distance between delimiter
+  types.
+
+* *Single thematic break syntax*: Only `'''` is supported. AsciiDoc
+  also accepts `---` and `***`.
+
+* *No block image macro*: LeanDoc uses `image:` (single colon) for
+  both inline and block images. AsciiDoc's `image::` (double colon)
+  is not needed.
+
+* *No generic STEM*: Use `latexmath:` directly instead of AsciiDoc's
+  `stem:` indirection.
+
+* *No `ifeval`*: Only boolean attribute tests (`ifdef`/`ifndef`) are
+  supported.
+
+=== Unsupported Features
+
+The following AsciiDoc features are not part of LeanDoc:
+
+* Passthrough blocks and inline passthrough (`++++`, `+...+`, `++...++`)
+* Keyboard, button, and menu macros (`kbd:[]`, `btn:[]`, `menu:[]`)
+* Audio and video macros
+* YouTube/Vimeo embedding
+* CSV table format
+* Page breaks
+* Counter attributes
+* Q&A lists
+* Cell content styles (`a|`, `l|`, etc.)
+* Substitution control attributes (`subs=...`)
+* Extension API (block processors, tree processors, etc.)
+
+These features are either rarely used in practice, add significant
+parser complexity, or can be approximated with other LeanDoc constructs.
+
+=== Processing Model
+
+AsciiDoc uses a multi-phase substitution pipeline where text
+interpretation depends on which substitutions are enabled and in what
+order. LeanDoc uses a straightforward parse-to-AST-to-render pipeline
+with no substitution phases. The parser builds a complete AST in a
+single pass, and the renderer traverses it to produce output. This makes
+LeanDoc's behavior fully predictable: the same input always produces the
+same AST regardless of context.
+
+== Implementation Notes for Parser Writers
+
+=== Lexical Analysis
+
+The lexer operates in two modes:
+
+. *Block mode* (at line start): Recognizes block delimiters, list
+  markers, section headers, metadata, and directives. The first 1-6
+  characters of a line determine the block type.
+
+. *Inline mode* (within content): Recognizes inline formatting, links,
+  macros, and attribute references. This mode is entered when parsing
+  the content portion of paragraph lines, list items, and similar
+  inline-content-bearing constructs.
+
+Mode switching occurs at newlines and block boundaries.
+
+=== Recursive Descent Strategy
+
+....
+Document
+ +-- parseDocumentHeader()
+ |    +-- parseDocumentTitle()
+ |    +-- parseAuthorLine()
+ |    +-- parseAttributeEntries()
+ +-- parseDocumentBody()
+      +-- parseBlock()              // Recursive
+           +-- parseSection()       // Recursive for nested sections
+           +-- parseParagraph()
+           |    +-- parseInlineContent()  // All inline elements
+           +-- parseDelimitedBlock()
+           +-- parseList()          // Handles nesting via marker count
+           +-- parseTable()
+....
+
+=== Key Parsing Decisions
+
+. *Line start lookahead*: Most blocks are identifiable by the first
+  1-6 characters (see <<line-start-decision-table>>).
+
+. *Inline context*: Within inline content, markup is processed greedily
+  left-to-right. The first matching closing delimiter ends the span.
+
+. *Block affinity*: Block attributes (`[...]`) are consumed by the
+  immediately following block -- they do not float.
+
+. *Blank line separation*: Adjacent blocks of the same type require a
+  blank line between them. Blank lines end paragraphs and separate list
+  items of different types.
+
+=== No Backtracking Required
+
+The grammar is designed as LL(k) with k <= 6 (for section heading
+markers), eliminating the need for backtracking. All parsing decisions
+can be made with limited lookahead.
+
+For inline formatting, if a potential opening delimiter (e.g., `*`)
+has no matching closing delimiter before the end of the paragraph, the
+parser treats the character as literal text. This "try-and-fallback"
+approach does not require backtracking in the traditional sense --
+the parser simply marks the position and, if no match is found,
+re-emits the character as plain text.
+
+[[line-start-decision-table]]
+=== Line-Start Decision Table
+
+This table shows how the parser identifies block types from the
+beginning of each line. The parser checks these patterns in order,
+preferring the first match.
+
+|===
+|Line prefix |Block type
+
+|`= ` (one `=` + space)
+|Document title (level 0)
+
+|`== ` through `====== `
+|Section heading (levels 1-5)
+
+|`* ` (star + space)
+|Unordered list item (level 1)
+
+|`** ` through `****** `
+|Unordered list item (levels 2-6)
+
+|`. ` (dot + space)
+|Ordered list item (level 1)
+
+|`.. ` through `...... `
+|Ordered list item (levels 2-6)
+
+|`.X` (dot + non-space)
+|Block title
+
+|`----`
+|Listing block delimiter
+
+|`....`
+|Literal block delimiter
+
+|`====`
+|Example block delimiter
+
+|`____`
+|Quote block delimiter
+
+|`****`
+|Sidebar block delimiter
+
+|`--` + line end
+|Open block delimiter
+
+|`////`
+|Comment block delimiter
+
+|`\|===`
+|Table delimiter
+
+|`[[`
+|Block anchor
+
+|`[`
+|Block attributes
+
+|`//`
+|Line comment
+
+|`'''`
+|Thematic break
+
+|`NOTE:` (etc.)
+|Admonition paragraph
+
+|`:X:` (colon + id + colon)
+|Attribute line
+
+|`include::`
+|Include directive
+
+|`ifdef::` / `ifndef::`
+|Conditional directive
+
+|`endif::`
+|End of conditional
+
+|`+` + line end
+|List continuation
+
+|(space or tab) + text
+|Literal paragraph
+
+|(other)
+|Normal paragraph line
+|===
+
+NOTE: The open block delimiter `--` must be at line start followed
+immediately by line end (empty line content). This prevents confusion
+with `--` as an em-dash within text, which only occurs mid-line.
+
+== AsciiDoc Feature Mapping
+
+This matrix shows which AsciiDoc features are supported in LeanDoc and
+how.
+
+|===
+|AsciiDoc Feature |LeanDoc Support |Notes
+
+|Document title (`= Title`)
+|Identical
+|
+
+|Author info (`Name <email>`)
+|Identical
+|
+
+|Revision (`v0.1, 2025-12-30`)
+|Identical
+|
+
+|Attributes (`:name: value`)
+|Identical
+|
+
+|Sections (`==` to `======`)
+|Identical
+|
+
+|Discrete heading (`[discrete]`)
+|Identical
+|
+
+|TOC (`:toc:` attribute)
+|Identical
+|
+
+|Normal paragraph
+|Identical
+|
+
+|Literal paragraph (indented)
+|Identical
+|
+
+|Line break (space + `+`)
+|Identical
+|
+
+|Lead paragraph (`[.lead]`)
+|Identical
+|
+
+|Admonition (`NOTE:` prefix)
+|Identical
+|
+
+|Bold (`*bold*`, `**bold**`)
+|Identical
+|
+
+|Italic (`_italic_`, `__italic__`)
+|Identical
+|
+
+|Monospace
+|Identical
+|
+
+|Superscript (`^super^`)
+|Identical
+|
+
+|Subscript (`~sub~`)
+|Identical
+|
+
+|Highlight (`#mark#`)
+|Identical
+|
+
+|Custom role (`[.role]#text#`)
+|Identical
+|
+
+|Unordered lists (`*`)
+|Identical
+|
+
+|Ordered lists (`.`)
+|Identical
+|
+
+|Checklist (`[*]`, `[x]`, `[ ]`)
+|Identical
+|
+
+|Description list (`term::`)
+|Identical
+|
+
+|Q&A lists
+|Not supported
+|Use description lists
+
+|List continuation (`+`)
+|Identical
+|
+
+|Listing block (`----`)
+|Identical
+|Fixed 4-char delimiter
+
+|Literal block (`....`)
+|Identical
+|Fixed 4-char delimiter
+
+|Quote block (`____`)
+|Identical
+|Fixed 4-char delimiter
+
+|Example block (`====`)
+|Identical
+|Fixed 4-char delimiter
+
+|Sidebar block (`****`)
+|Identical
+|Fixed 4-char delimiter
+
+|Open block (`--`)
+|Identical
+|
+
+|Comment block (`////`)
+|Identical
+|Fixed 4-char delimiter
+
+|Passthrough block (`++++`)
+|Not supported
+|
+
+|Source code (`[source,lang]`)
+|Identical
+|
+
+|Basic table (`\|===`)
+|Identical
+|
+
+|Table header
+|Identical
+|
+
+|Column specs (`[cols="..."]`)
+|Identical
+|
+
+|Column/row span
+|Identical
+|
+
+|Cell alignment
+|Identical
+|
+
+|Cell styles (`a\|`, `l\|`)
+|Not supported
+|
+
+|CSV tables
+|Not supported
+|
+
+|URL auto-linking
+|Identical
+|
+
+|URL with text
+|Identical
+|
+
+|Link attributes
+|Identical
+|
+
+|Email auto-linking
+|Identical
+|
+
+|Anchors (`[[id]]`, `[#id]`)
+|Identical
+|
+
+|Cross-references (`\<<id>>`)
+|Identical
+|
+
+|Inter-document xref
+|Identical
+|
+
+|Block image (`image::`)
+|Not supported
+|Use `image:` in own paragraph
+
+|Inline image (`image:`)
+|Identical
+|
+
+|Audio/Video
+|Not supported
+|
+
+|Include file (`include::`)
+|Identical
+|
+
+|Tag selection
+|Identical
+|
+
+|Line ranges
+|Identical
+|
+
+|Keyboard macro (`kbd:[]`)
+|Not supported
+|
+
+|Button macro (`btn:[]`)
+|Not supported
+|
+
+|Menu macro (`menu:[]`)
+|Not supported
+|
+
+|Footnote (`footnote:[]`)
+|Identical
+|
+
+|Index terms (`((term))`)
+|Identical
+|
+
+|Inline STEM (`stem:[]`)
+|Not supported
+|Use `latexmath:[]`
+
+|Block STEM
+|Not supported
+|Use `latexmath:` in paragraph
+
+|LaTeX math (`latexmath:[]`)
+|Identical
+|
+
+|ifdef/ifndef
+|Identical
+|
+
+|ifeval
+|Not supported
+|
+
+|Multi-attribute conditions
+|Identical
+|OR only
+
+|Line comment (`//`)
+|Identical
+|
+
+|Block comment (`////`)
+|Identical
+|
+
+|Thematic break
+|`'''` only
+|`---` and `***` not supported
+
+|Page break
+|Not supported
+|
+
+|Bibliography section
+|Identical
+|
+
+|Glossary section
+|Identical
+|
+
+|Index section
+|Identical
+|
+
+|Abstract section
+|Identical
+|
+
+|Appendix section
+|Identical
+|
+
+|Attribute reference (`{attr}`)
+|Identical
+|
+
+|Counter attributes
+|Not supported
+|
+
+|Text replacement (`(C)` etc.)
+|Identical
+|
+
+|Escape (`\*not bold\*`)
+|Identical
+|Uniform rules
+
+|Passthrough substitution
+|Not supported
+|
+
+|Block ID (`[[id]]`, `[#id]`)
+|Identical
+|
+
+|Block role (`[.role]`)
+|Identical
+|
+
+|Block options (`[options="..."]`)
+|Identical
+|
+
+|Block title (`.Title`)
+|Identical
+|
+
+|Extensions
+|Not supported
+|
+|===

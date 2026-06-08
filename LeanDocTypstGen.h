@@ -76,7 +76,7 @@ private:
     Options dopt;
 };
 
-} // namespace LeanDoc2
+} // namespace LeanDoc
 
 #endif
 

@@ -18,442 +18,535 @@
 */
 
 #include "LeanDocParser2.h"
-#include <QtDebug>
+using namespace LeanDoc;
 
-namespace LeanDoc {
+
+static inline bool FIRST_section(int k) {
+    return k == LineTok::T_SECTION;
+}
+
+static inline bool FIRST_list(int k) {
+    return k == LineTok::T_UL_ITEM || k == LineTok::T_OL_ITEM || k == LineTok::T_DESC_TERM;
+}
+
+static inline bool FIRST_delimited(int k) {
+    return k == LineTok::T_DELIM_LISTING || k == LineTok::T_DELIM_LITERAL ||
+           k == LineTok::T_DELIM_QUOTE   || k == LineTok::T_DELIM_EXAMPLE ||
+           k == LineTok::T_DELIM_SIDEBAR  || k == LineTok::T_DELIM_OPEN ||
+           k == LineTok::T_DELIM_COMMENT;
+}
+
+static inline bool FIRST_blockMeta(int k) {
+    return k == LineTok::T_BLOCK_ANCHOR || k == LineTok::T_BLOCK_ATTRS || k == LineTok::T_BLOCK_TITLE;
+}
+
+static inline bool terminatesParagraph(int k) {
+    return k == LineTok::T_BLANK || FIRST_section(k) || FIRST_list(k) ||
+           k == LineTok::T_TABLE_DELIM || FIRST_delimited(k) ||
+           k == LineTok::T_ADMONITION || k == LineTok::T_BLOCK_MACRO ||
+           k == LineTok::T_DIRECTIVE || FIRST_blockMeta(k) ||
+           k == LineTok::T_THEMATIC || k == LineTok::T_PAGEBREAK ||
+           k == LineTok::T_LIST_CONT || k == LineTok::T_EOF;
+}
+
+static int sectionLevel(const QString& raw) {
+    const QString s = raw.trimmed();
+    int n = 0;
+    while( n < s.size() && s[n] == '=')
+        ++n;
+    return n;
+}
+
+static QString sectionTitle(const QString& raw) {
+    const QString s = raw.trimmed();
+    int n = 0;
+    while( n < s.size() && s[n] == '=')
+        ++n;
+    return s.mid(n).trimmed();
+}
+
+static int markerLevel(const QString& raw, QChar marker) {
+    const QString s = raw.trimmed();
+    int n = 0;
+    while( n < s.size() && s[n] == marker)
+        ++n;
+    return n;
+}
+
+static QString markerText(const QString& raw, QChar marker) {
+    const QString s = raw.trimmed();
+    int n = 0;
+    while( n < s.size() && s[n] == marker)
+        ++n;
+    return s.mid(n).trimmed();
+}
+
+static bool matchAt(const QString& s, int pos, const char* pat, int patLen)
+{
+    if( pos + patLen > s.size()) return false;
+    for( int k = 0; k < patLen; ++k)
+        if( s[pos + k] != QLatin1Char(pat[k]))
+            return false;
+    return true;
+}
+
+static int findDelim(const QString& s, int start, const char* pat, int patLen)
+{
+    for( int i = start; i <= s.size() - patLen; ++i)
+        if( matchAt(s, i, pat, patLen))
+            return i;
+    return -1;
+}
+
+struct InlineDelim {
+    const char* open;
+    int openLen;
+    const char* close;
+    int closeLen;
+    Node::Kind kind;
+    bool recurse;
+};
+
+static const InlineDelim inlineDelims[] = {
+    { "**", 2, "**", 2, Node::K_Bold, true },
+    { "__", 2, "__", 2, Node::K_Italic, true },
+    { "``", 2, "``", 2, Node::K_Monospace, true },
+    { "*",  1, "*",  1, Node::K_Bold, true },
+    { "_",  1, "_",  1, Node::K_Italic, true },
+    { "`",  1, "`",  1, Node::K_Monospace, false },
+    { "#",  1, "#",  1, Node::K_Highlight, true },
+    { "^",  1, "^",  1, Node::K_Superscript, false },
+    { "~",  1, "~",  1, Node::K_Subscript, false }
+};
+static const int inlineDelimCount = (int)(sizeof(inlineDelims) / sizeof(inlineDelims[0]));
 
 static bool isUrlSchemeStart(const QString& s, int i)
 {
-    return s.mid(i).startsWith("http:") || s.mid(i).startsWith("https:") ||
-           s.mid(i).startsWith("ftp:")  || s.mid(i).startsWith("irc:") ||
-           s.mid(i).startsWith("mailto:");
+    return s.mid(i).startsWith("http://") || s.mid(i).startsWith("https://") ||
+           s.mid(i).startsWith("ftp://")  || s.mid(i).startsWith("mailto:");
 }
 
-Node* Parser::parse(const QString& input, ParseError* outErr)
+static bool isInlineMacroName(const QString& name)
 {
-    dlex.setInput(input);
-    dhaveErr = false;
-    derr = ParseError();
+    return name == "image" || name == "link" || name == "mailto" || name == "xref" ||
+           name == "footnote" || name == "kbd" || name == "btn" || name == "menu" ||
+           name == "stem" || name == "latexmath" || name == "pass" || name == "anchor";
+}
 
-    Node* root = 0;
-    try {
-        root = parseDocument();
-    }catch (...) {
-        if (root)
-            Node::deleteTree(root);
-        root = 0;
+static quint8 tokKindToDelimKind(LineTok::Kind k)
+{
+    switch( k ) {
+    case LineTok::T_DELIM_LISTING:
+        return Node::DK_Listing;
+    case LineTok::T_DELIM_LITERAL:
+        return Node::DK_Literal;
+    case LineTok::T_DELIM_QUOTE:
+        return Node::DK_Quote;
+    case LineTok::T_DELIM_EXAMPLE:
+        return Node::DK_Example;
+    case LineTok::T_DELIM_SIDEBAR:
+        return Node::DK_Sidebar;
+    case LineTok::T_DELIM_OPEN:
+        return Node::DK_Open;
+    case LineTok::T_DELIM_COMMENT:
+        return Node::DK_Comment;
+    default:
+        return Node::DK_None;
     }
+}
 
-    if (outErr)
-        *outErr = derr;
-    return root;
+// split a table row on unescaped '|', honouring \|
+static QStringList splitUnescapedPipe(const QString& s)
+{
+    QStringList out;
+    QString acc;
+    for( int i = 0; i < s.size(); ++i ) {
+        if( s[i] == '\\' && i + 1 < s.size() && s[i+1] == '|') {
+            acc.append('|');
+            ++i;
+        } else if( s[i] == '|') {
+            out.append(acc.trimmed());
+            acc.clear();
+        } else {
+            acc.append(s[i]);
+        }
+    }
+    out.append(acc.trimmed());
+    return out;
 }
 
 bool Parser::accept(LineTok::Kind k)
 {
-    if (la(0).kind == k) {
+    if( la(0).kind == k) {
         take();
         return true;
     }
     return false;
 }
 
-void Parser::expect(LineTok::Kind k, const QString& what)
+bool Parser::expect(LineTok::Kind k, const char* where)
 {
-    if (!accept(k)) {
-        error("Expected " + what, la(0).lineNo);
-    }
-}
-
-void Parser::error(const QString &msg, int row, int col)
-{
-    dhaveErr = true;
-    derr.line = row;
-    derr.column = col;
-    derr.message = msg;
-    throw 1;
-}
-
-void Parser::skipBlankAndLineComments()
-{
-    while (la(0).kind == LineTok::T_BLANK || la(0).kind == LineTok::T_LINE_COMMENT)
+    if( la(0).kind == k) {
         take();
+        return true;
+    }
+    errors << Error(QString("expected %1 in %2").arg(LineTok::kindName(k)).arg(where), la(0).lineNo, 1);
+    return false;
 }
 
-static QStringList splitUnescapedPipe(const QString& line)
+void Parser::error(const QString& msg, int row, int col)
 {
-    QStringList parts;
-    QString cur;
-    cur.reserve(line.size());
-
-    int backslashRun = 0; // number of consecutive '\' immediately preceding current char
-
-    for (int i = 0; i < line.size(); ++i) {
-        const QChar c = line[i];
-
-        if (c == '|') {
-            if ((backslashRun % 2) == 0) {
-                // true separator
-                parts.append(cur);
-                cur.clear();
-            } else {
-                // escaped pipe: replace "\|" with "|" (remove one escape backslash)
-                if (!cur.isEmpty())
-                    cur.chop(1);
-                cur.append('|');
-            }
-            backslashRun = 0;
-            continue;
-        }
-
-        cur.append(c);
-
-        if (c == '\\')
-            backslashRun += 1;
-        else
-            backslashRun = 0;
-    }
-
-    parts.append(cur);
-    return parts;
+    errors << Error(msg, row, col);
 }
 
-QList<Node *> Parser::readCells(const LineTok & rowTok)
+void Parser::skipBlankLines()
 {
-    // Split by '|' but keep empty prefix; cells are after each '|'
-    QStringList parts = splitUnescapedPipe(rowTok.raw);
-    QList<Node *> cells;
-    for (int i=1;i<parts.size();++i) {
-        QString cell = parts[i];
-
-        Node* c = new Node(Node::K_TableCell);
-        c->pos = SourcePos(rowTok.lineNo, 1);
-
-        // CellSpec ends with '|' in grammar; in practice AsciiDoc spec is richer.
-        // Implement a minimal subset: consume leading spec like "2.3+^a|" etc if present (best-effort).
-        QString s = cell.trimmed();
-        // For simplicity store raw cell text; advanced spec parsing can be extended.
-        c->children = parseInlineContent(s, rowTok.lineNo);
-        cells << c;
-    }
-    return cells;
+    while( la(0).kind == LineTok::T_BLANK )
+        take();
 }
 
 QString Parser::stripOuter(const QString& s, QChar a, QChar b)
 {
-    QString t = s.trimmed();
-    if (t.size() >= 2 && t[0]==a && t[t.size()-1]==b)
-        return t.mid(1, t.size()-2);
-    return t;
+    if( s.size() >= 2 && s[0] == a && s[s.size()-1] == b )
+        return s.mid(1, s.size()-2);
+    return s;
+}
+
+// split on commas but respect quoted strings
+static QStringList splitAttrComma(const QString& s)
+{
+    QStringList out;
+    QString acc;
+    bool inQuote = false;
+    QChar quoteChar;
+    for( int i = 0; i < s.size(); ++i ) {
+        const QChar c = s[i];
+        if( !inQuote && (c == '"' || c == '\'') ) {
+            inQuote = true;
+            quoteChar = c;
+            acc.append(c);
+        } else if( inQuote && c == quoteChar ) {
+            inQuote = false;
+            acc.append(c);
+        } else if( !inQuote && c == ',' ) {
+            out.append(acc);
+            acc.clear();
+        } else {
+            acc.append(c);
+        }
+    }
+    if( !acc.isEmpty() )
+        out.append(acc);
+    return out;
 }
 
 QMap<QString, QString> Parser::parseAttrList(const QString& bracketed)
 {
-    // Very small parser for AttributeEntry = IDENTIFIER [ "=" (IDENTIFIER | STRING_LITERAL) ]
-    // Input can be "[...]" or the inner "..."
-    QString inner = bracketed.trimmed();
-    inner = stripOuter(inner, '[', ']');
-
-    QMap<QString, QString> m;
-    QString cur;
-    QStringList parts = inner.split(',', QString::SkipEmptyParts);
-    for (int i=0;i<parts.size();++i) {
-        QString p = parts[i].trimmed();
-        if (p.isEmpty())
+    QMap<QString, QString> res;
+    const QString inner = stripOuter(bracketed.trimmed(), '[', ']');
+    if( inner.isEmpty() )
+        return res;
+    const QStringList parts = splitAttrComma(inner);
+    for( int i = 0; i < parts.size(); ++i ) {
+        const QString p = parts[i].trimmed();
+        if( p.isEmpty())
             continue;
         int eq = p.indexOf('=');
-        if (eq < 0) {
-            m.insert(p, ""); // boolean attr
-        } else {
-            QString k = p.left(eq).trimmed();
-            QString v = p.mid(eq+1).trimmed();
-            // strip simple quotes "..."
-            v = stripOuter(v, '\"', '\"');
-            m.insert(k, v);
-        }
+        if( eq > 0)
+            res.insert(p.left(eq).trimmed(), p.mid(eq+1).trimmed());
+        else if( i == 0)
+            res.insert("positional0", p);
+        else
+            res.insert(QString("positional%1").arg(i), p);
     }
-    return m;
+    return res;
+}
+
+Node* Parser::parse(const QString& input)
+{
+    errors.clear();
+    dlex.setInput(input);
+    return parseDocument();
 }
 
 Node* Parser::parseDocument()
 {
     Node* doc = new Node(Node::K_Document);
-    doc->pos = SourcePos(1,1);
+    doc->pos = RowCol(1, 1);
 
-    skipBlankAndLineComments();
-    parseDocumentHeader(doc);
-
-    while (!dlex.atEnd()) {
-        skipBlankAndLineComments();
-        if (dlex.atEnd())
-            break;
-
-        Node* b = parseBlock();
-        if (b)
-            doc->add(b);
-        else
-            break;
+    // skip leading comments and blanks before header
+    while( la(0).kind == LineTok::T_BLANK || la(0).kind == LineTok::T_LINE_COMMENT) {
+        if( la(0).kind == LineTok::T_LINE_COMMENT) {
+            Node* c = new Node(Node::K_LineComment);
+            c->pos = RowCol(la(0).lineNo, 1);
+            c->text = la(0).raw.trimmed().mid(2);
+            doc->add(c);
+        }
+        take();
     }
+    parseDocumentHeader(doc);
+    skipBlankLines();
 
+    while( !dlex.atEnd()) {
+        skipBlankLines();
+        if( dlex.atEnd())
+            break;
+        Node* b = parseBlock();
+        if( !b) break;
+        doc->add(b);
+    }
     return doc;
 }
 
 void Parser::parseDocumentHeader(Node* doc)
 {
-    // Grammar: DocumentHeader = DocumentTitle [AuthorLine] [RevisionLine] AttributeEntry*
-    // Store header fields in doc->kv for simplicity.
-    if (la(0).kind == LineTok::T_SECTION && la(0).level == 1) {
+    // document title: = Title (level 1)
+    if( la(0).kind == LineTok::T_SECTION && sectionLevel(la(0).raw) == 1) {
         LineTok t = take();
-        doc->kv.insert("title", t.rest);
-        doc->kv.insert("titleLine", QString::number(t.lineNo));
-        skipBlankAndLineComments();
+        doc->kv.insert("title", sectionTitle(t.raw));
+        skipBlankLines();
     }
 
-    // Minimal author line parsing: treat as raw if it looks like "Name <mail>" etc.
-    if (la(0).kind == LineTok::T_TEXT) {
-        QString s = la(0).raw.trimmed();
-        if (s.contains('<') && s.contains('>')) {
+    // author line: Name <email>
+    if( la(0).kind == LineTok::T_TEXT) {
+        const QString s = la(0).raw.trimmed();
+        if( s.contains('<') && s.contains('>')) {
             doc->kv.insert("authorLine", s);
-            doc->kv.insert("authorLineNo", QString::number(la(0).lineNo));
             take();
-            skipBlankAndLineComments();
+            skipBlankLines();
         }
     }
 
-    // Minimal revision line parsing: starts with 'v'
-    if (la(0).kind == LineTok::T_TEXT) {
-        QString s = la(0).raw.trimmed();
-        if (s.startsWith("v")) {
+    // revision line: vN.N...
+    if( la(0).kind == LineTok::T_TEXT) {
+        const QString s = la(0).raw.trimmed();
+        if( s.size() >= 2 && s[0] == 'v' && s[1].isDigit()) {
             doc->kv.insert("revisionLine", s);
-            doc->kv.insert("revisionLineNo", QString::number(la(0).lineNo));
             take();
-            skipBlankAndLineComments();
+            skipBlankLines();
         }
     }
 
-    // Document attributes: :name: value
-    while (la(0).kind == LineTok::T_TEXT) {
-        QString s = la(0).raw.trimmed();
-        if (!s.startsWith(":"))
+    // document attributes: :name: value
+    while( la(0).kind == LineTok::T_TEXT) {
+        const QString s = la(0).raw.trimmed();
+        if( !s.startsWith(':'))
             break;
-        // parse ":name: value"
         int second = s.indexOf(':', 1);
-        if (second <= 1)
+        if( second <= 1)
             break;
-        QString name = s.mid(1, second-1).trimmed();
-        QString val  = s.mid(second+1).trimmed();
-        doc->kv.insert("attr:" + name, val);
+        const QString attrName = s.mid(1, second-1).trimmed();
+        const QString attrVal  = s.mid(second+1).trimmed();
+        doc->kv.insert("attr:" + attrName, attrVal);
         take();
     }
-}
-
-BlockMeta* Parser::parseBlockMetaOpt()
-{
-    // BlockMetadata = [BlockAnchor] [BlockAttributes] [BlockTitle]
-    if (la(0).kind != LineTok::T_BLOCK_ANCHOR &&
-        la(0).kind != LineTok::T_BLOCK_ATTRS &&
-        la(0).kind != LineTok::T_BLOCK_TITLE)
-        return 0;
-
-    BlockMeta* m = new BlockMeta();
-
-    if (la(0).kind == LineTok::T_BLOCK_ANCHOR) {
-        QString s = take().rest;         // like "[[id, text]]"
-        QString inner = stripOuter(stripOuter(s, '[', ']'), '[', ']'); // remove both [[ ]]
-        int comma = inner.indexOf(',');
-        if (comma < 0)
-            m->anchorId = inner.trimmed();
-        else {
-            m->anchorId = inner.left(comma).trimmed();
-            m->anchorText = inner.mid(comma+1).trimmed();
-        }
-    }
-
-    if (la(0).kind == LineTok::T_BLOCK_ATTRS) {
-        QMap<QString, QString> a = parseAttrList(take().rest);
-        for (QMap<QString, QString>::ConstIterator it=a.begin(); it!=a.end(); ++it)
-            m->attrs.insert(it.key(), it.value());
-        // derive roles: [.lead] style is encoded in key ".lead" or "role" depending on usage
-        for (QMap<QString, QString>::ConstIterator it2=m->attrs.begin(); it2!=m->attrs.end(); ++it2) {
-            if (it2.key().startsWith("."))
-                m->roles.append(it2.key().mid(1));
-        }
-    }
-
-    if (la(0).kind == LineTok::T_BLOCK_TITLE) {
-        m->title = take().rest.trimmed();
-    }
-
-    // If nothing actually captured, still return it (presence matters for scoping).
-    return m;
 }
 
 Node* Parser::parseBlock()
 {
     BlockMeta* meta = parseBlockMetaOpt();
+    if( meta )
+        skipBlankLines(); // block meta may be separated from its block by blank lines
+    const int k = la(0).kind;
 
-    // SpecialSection markers like [bibliography] are parsed as normal attributes in meta
-    // and apply to the following Section block.
-    if (la(0).kind == LineTok::T_SECTION)
+    if( FIRST_section(k))
         return parseSection(meta);
-    if (la(0).kind == LineTok::T_ADMONITION)
+    if( k == LineTok::T_ADMONITION)
         return parseAdmonitionParagraph(meta);
-
-    if (la(0).kind == LineTok::T_UL_ITEM || la(0).kind == LineTok::T_OL_ITEM || la(0).kind == LineTok::T_DESC_TERM)
+    if( FIRST_list(k))
         return parseList(meta);
-
-    if (la(0).kind == LineTok::T_TABLE_DELIM)
+    if( k == LineTok::T_TABLE_DELIM)
         return parseTable(meta);
-
-    if (la(0).kind == LineTok::T_DELIM_LISTING || la(0).kind == LineTok::T_DELIM_LITERAL ||
-        la(0).kind == LineTok::T_DELIM_QUOTE || la(0).kind == LineTok::T_DELIM_EXAMPLE ||
-        la(0).kind == LineTok::T_DELIM_SIDEBAR || la(0).kind == LineTok::T_DELIM_OPEN ||
-        la(0).kind == LineTok::T_DELIM_COMMENT )
+    if( FIRST_delimited(k))
         return parseDelimited(meta);
-
-    if (la(0).kind == LineTok::T_BLOCK_MACRO)
+    if( k == LineTok::T_BLOCK_MACRO)
         return parseBlockMacro(meta);
-    if (la(0).kind == LineTok::T_DIRECTIVE)
+    if( k == LineTok::T_DIRECTIVE)
         return parseDirective(meta);
-
-    if (la(0).kind == LineTok::T_THEMATIC || la(0).kind == LineTok::T_PAGEBREAK || la(0).kind == LineTok::T_LINE_COMMENT)
+    if( k == LineTok::T_THEMATIC || k == LineTok::T_PAGEBREAK || k == LineTok::T_LINE_COMMENT)
         return parseBreakOrComment(meta);
+    if( k == LineTok::T_TEXT)
+        return parseParagraphOrLiteral(meta);
 
-    // Paragraph (normal or literal)
-    return parseParagraphOrLiteral(meta);
+    // unexpected token: skip and retry
+    if( k != LineTok::T_EOF) {
+        error("unexpected token", la(0).lineNo);
+        take();
+        delete meta;
+        return parseBlock();
+    }
+
+    delete meta;
+    return 0;
 }
 
-static inline bool isMeta(const LineTok& cur) {
-    return cur.kind == LineTok::T_BLOCK_ANCHOR || cur.kind == LineTok::T_BLOCK_ATTRS || cur.kind == LineTok::T_BLOCK_TITLE;
+BlockMeta* Parser::parseBlockMetaOpt()
+{
+    if( !FIRST_blockMeta(la(0).kind)) return 0;
+
+    BlockMeta* m = new BlockMeta();
+
+    while( FIRST_blockMeta(la(0).kind)) {
+        if( la(0).kind == LineTok::T_BLOCK_ANCHOR) {
+            const QString s = take().raw.trimmed();
+            const QString inner = s.mid(2, s.size()-4);
+            int comma = inner.indexOf(',');
+            if( comma < 0 )
+                m->anchorId = inner.trimmed();
+            else {
+                m->anchorId = inner.left(comma).trimmed();
+                m->anchorText = inner.mid(comma+1).trimmed();
+            }
+        } else if( la(0).kind == LineTok::T_BLOCK_ATTRS) {
+            const QString s = take().raw.trimmed();
+            QMap<QString, QString> a = parseAttrList(s);
+            for( QMap<QString, QString>::ConstIterator it = a.constBegin(); it != a.constEnd(); ++it) {
+                const QString& val = it.value();
+                // handle AsciiDoc shorthand: [#id] [.role] [%option]
+                if( it.key().startsWith("positional") && val.startsWith('#'))
+                    m->anchorId = val.mid(1);
+                else if( it.key().startsWith("positional") && val.startsWith('.'))
+                    m->roles.append(val.mid(1));
+                else if( it.key().startsWith("positional") && val.startsWith('%'))
+                    m->attrs.insert("options", val.mid(1));
+                else
+                    m->attrs.insert(it.key(), val);
+            }
+        } else if( la(0).kind == LineTok::T_BLOCK_TITLE) {
+            const QString s = take().raw.trimmed();
+            m->title = s.mid(1).trimmed();
+        }
+    }
+
+    return m;
 }
 
 Node* Parser::parseSection(BlockMeta* m)
 {
-    LineTok t = take(); // T_SECTION
-    Node* s = new Node(Node::K_Section);
-    s->pos = SourcePos(t.lineNo, 1);
-    s->meta = m;
-    s->kv.insert("level", QString::number(t.level));
-    s->name = t.rest; // title text (TEXT_RUN)
-    // Consume until next section of same/higher level
+    LineTok t = take();
+    const int lvl = sectionLevel(t.raw);
 
-    while (!dlex.atEnd()) {
-        skipBlankAndLineComments();
-        if (dlex.atEnd())
-            break;
-        const LineTok& cur = la(0);
-        if (cur.kind == LineTok::T_SECTION && cur.level <= t.level)
+    Node* n = new Node(Node::K_Section);
+    n->pos = RowCol(t.lineNo, 1);
+    n->meta = m;
+    n->level = lvl;
+    n->name = sectionTitle(t.raw);
+
+    while( !dlex.atEnd() ) {
+        skipBlankLines();
+        if( dlex.atEnd() )
             break;
 
-        if (cur.kind == LineTok::T_TABLE_LINE )
-            error("unexpected table line", cur.lineNo);
-
-        if( isMeta(cur) ) {
-            int pos = 1;
-            while (isMeta(la(pos)))
-                pos++;
-            const LineTok& next = la(pos);
-            if (next.kind == LineTok::T_SECTION && next.level <= t.level)
+        // stop if next section is same or higher level
+        if( FIRST_section(la(0).kind)) {
+            if( sectionLevel(la(0).raw) <= lvl)
                 break;
         }
 
+        // peek past metadata to detect section end
+        if( FIRST_blockMeta(la(0).kind)) {
+            int off = 0;
+            while( FIRST_blockMeta(la(off).kind))
+                ++off;
+            if( FIRST_section(la(off).kind) ) {
+                if( sectionLevel(la(off).raw) <= lvl)
+                    break;
+            }
+        }
+
+        if( la(0).kind == LineTok::T_TABLE_LINE) {
+            error("unexpected table line outside table", la(0).lineNo);
+            take();
+            continue;
+        }
+
         Node* b = parseBlock();
-        if (!b)
+        if( !b )
             break;
-        s->add(b);
+        n->add(b);
     }
-    return s;
+    return n;
+}
+
+Node* Parser::parseParagraphOrLiteral(BlockMeta* m)
+{
+    bool literal = (!la(0).raw.isEmpty() && la(0).raw[0].isSpace());
+
+    Node* p = new Node(literal ? Node::K_LiteralParagraph : Node::K_Paragraph);
+    p->pos = RowCol(la(0).lineNo, 1);
+    p->meta = m;
+
+    QStringList lines;
+    while( la(0).kind == LineTok::T_TEXT) {
+        if( literal) {
+            if( la(0).raw.isEmpty() || !la(0).raw[0].isSpace() )
+                break;
+            lines << la(0).raw.mid(1);
+        } else {
+            const QString s = la(0).raw.trimmed();
+            if( s.isEmpty())
+                break;
+            // hard line break: " +" at end of line
+            if( s.endsWith(" +"))
+                lines << s.left(s.size()-2) + "\n";
+            else
+                lines << s;
+        }
+        take();
+        if( terminatesParagraph(la(0).kind))
+            break;
+    }
+
+    if( literal)
+        p->text = lines.join("\n");
+    else
+        p->children = parseInlineContent(lines.join(" "), p->pos.row);
+    return p;
 }
 
 Node* Parser::parseAdmonitionParagraph(BlockMeta* m)
 {
     LineTok t = take();
+    const QString s = t.raw.trimmed();
+    int colon = s.indexOf(':');
+
     Node* a = new Node(Node::K_AdmonitionParagraph);
-    a->pos = SourcePos(t.lineNo, 1);
+    a->pos = RowCol(t.lineNo, 1);
     a->meta = m;
-    a->name = t.head; // NOTE/TIP/...
-    a->children = parseInlineContent(t.rest, t.lineNo);
+    a->name = s.left(colon);
+    a->children = parseInlineContent(s.mid(colon+1).trimmed(), t.lineNo);
     return a;
-}
-
-Node* Parser::parseParagraphOrLiteral(BlockMeta* m)
-{
-    // LiteralParagraph starts with at least one space in the raw line
-    const bool literal = (la(0).kind == LineTok::T_TEXT && !la(0).raw.isEmpty() && la(0).raw[0].isSpace());
-
-    Node* p = new Node(literal ?
-                           Node::K_LiteralParagraph :
-                           Node::K_Paragraph);
-    p->pos = SourcePos(la(0).lineNo, 1);
-    p->meta = m;
-
-    QStringList lines;
-    while (la(0).kind == LineTok::T_TEXT) {
-        if (literal) {
-            if (la(0).raw.isEmpty() || !la(0).raw[0].isSpace())
-                break;
-            lines << la(0).raw.mid(1); // keep verbatim minus the leading space
-        } else {
-            // stop paragraph on blank line or obvious block starters
-            QString s = la(0).raw.trimmed();
-            if (s.isEmpty())
-                break;
-            lines << s;
-        }
-        take();
-        if (la(0).kind == LineTok::T_BLANK)
-            break;
-        if (!literal) {
-            if (la(0).kind == LineTok::T_SECTION || la(0).kind == LineTok::T_UL_ITEM || la(0).kind == LineTok::T_OL_ITEM ||
-                la(0).kind == LineTok::T_DESC_TERM || la(0).kind == LineTok::T_TABLE_DELIM ||
-                la(0).kind == LineTok::T_DELIM_LISTING || la(0).kind == LineTok::T_DELIM_LITERAL ||
-                la(0).kind == LineTok::T_ADMONITION || la(0).kind == LineTok::T_BLOCK_MACRO ||
-                la(0).kind == LineTok::T_DIRECTIVE)
-                break;
-        }
-    }
-
-    if (literal) {
-        p->text = lines.join("\n");
-    } else {
-        p->children = parseInlineContent(lines.join(" "), p->pos.line);
-    }
-    return p;
 }
 
 Node* Parser::parseDelimited(BlockMeta* m)
 {
-    // Handles: Listing/Literal/Quote/Example/Sidebar/Open/Passthrough/Comment
-
-    LineTok::Kind k = la(0).kind;
+    const LineTok::Kind k = la(0).kind;
     LineTok open = take();
 
     Node* b = new Node(Node::K_DelimitedBlock);
-    b->pos = SourcePos(open.lineNo, 1);
+    b->pos = RowCol(open.lineNo, 1);
     b->meta = m;
-    b->kv.insert("delim", QString::number((int)k));
+    b->delimKind = tokKindToDelimKind(k);
 
-    // Listing/Literal/Passthrough/Comment/Stem are raw-ish; Quote/Example/Sidebar/Open contain BlockContent
     bool rawOnly = (k == LineTok::T_DELIM_LISTING || k == LineTok::T_DELIM_LITERAL ||
                     k == LineTok::T_DELIM_COMMENT);
 
-    if (rawOnly) {
+    if( rawOnly) {
         QStringList lines;
-        while (!dlex.atEnd() && la(0).kind != k) {
+        while( !dlex.atEnd() && la(0).kind != k)
             lines << take().raw;
-        }
         expect(k, "closing delimiter");
         b->text = lines.join("\n");
         return b;
     }
 
-    // BlockContent = ( Paragraph | List | Table | DelimitedBlock | BLANK_LINE )*
-    while (!dlex.atEnd() && la(0).kind != k) {
-        skipBlankAndLineComments();
-        if (la(0).kind == k)
+    // container block (quote, example, sidebar, open): parse children
+    while( !dlex.atEnd() && la(0).kind != k) {
+        skipBlankLines();
+        if( la(0).kind == k || dlex.atEnd())
             break;
         Node* inner = parseBlock();
-        if (!inner)
+        if( !inner )
             break;
         b->add(inner);
     }
@@ -464,176 +557,198 @@ Node* Parser::parseDelimited(BlockMeta* m)
 Node* Parser::parseList(BlockMeta* m)
 {
     Node* lst = new Node(Node::K_List);
-    lst->pos = SourcePos(la(0).lineNo, 1);
+    lst->pos = RowCol(la(0).lineNo, 1);
     lst->meta = m;
 
-    // Determine list type by first token
-    if (la(0).kind == LineTok::T_DESC_TERM)
-        lst->kv.insert("type", "description");
-    else if (la(0).kind == LineTok::T_OL_ITEM)
-        lst->kv.insert("type", "ordered");
+    if( la(0).kind == LineTok::T_DESC_TERM)
+        lst->listType = Node::LT_Description;
+    else if( la(0).kind == LineTok::T_OL_ITEM)
+        lst->listType = Node::LT_Ordered;
     else
-        lst->kv.insert("type", "unordered");
+        lst->listType = Node::LT_Unordered;
 
-    while (true) {
-        if (lst->kv.value("type")=="description") {
-            if (la(0).kind != LineTok::T_DESC_TERM)
+    while( true) {
+        if( lst->listType == Node::LT_Description) {
+            if( la(0).kind != LineTok::T_DESC_TERM)
                 break;
+
             LineTok termTok = take();
+            const QString ts = termTok.raw.trimmed();
+            int c = 0;
+            for( int i = ts.size()-1; i >= 0 && ts[i] == ':'; --i)
+                ++c;
 
             Node* item = new Node(Node::K_ListItem);
-            item->pos = SourcePos(termTok.lineNo, 1);
-            item->kv.insert("kind", "definition");
-            item->kv.insert("termLevel", QString::number(termTok.level));
-            item->name = termTok.rest; // term text_run
+            item->pos = RowCol(termTok.lineNo, 1);
+            item->level = c;
+            item->name = ts.left(ts.size()-c).trimmed();
 
-            // optional definition line (InlineContent)
-            if (la(0).kind == LineTok::T_TEXT && !la(0).raw.trimmed().isEmpty()) {
-                QString defLine = la(0).raw.trimmed();
+            // optional definition on next line(s)
+            if( la(0).kind == LineTok::T_TEXT && !la(0).raw.trimmed().isEmpty()) {
+                LineTok defTok = la(0);
+                QString defText = la(0).raw.trimmed();
                 take();
+                // collect wrapped continuation lines
+                while( la(0).kind == LineTok::T_TEXT) {
+                    const QString cont = la(0).raw.trimmed();
+                    if( cont.isEmpty() )
+                        break;
+                    defText += " " + cont;
+                    take();
+                }
                 Node* defPara = new Node(Node::K_Paragraph);
-                defPara->pos = SourcePos(termTok.lineNo, 1);
-                defPara->children = parseInlineContent(defLine, defPara->pos.line);
+                defPara->pos = RowCol(defTok.lineNo, 1);
+                defPara->children = parseInlineContent(defText, defTok.lineNo);
                 item->add(defPara);
             }
 
-            // ListItemContinuation: blank + + + blank + (Paragraph|DelimitedBlock)
-            skipBlankAndLineComments();
-            if (la(0).kind == LineTok::T_LIST_CONT) {
+            // list continuations (repeatable)
+            skipBlankLines();
+            while( la(0).kind == LineTok::T_LIST_CONT) {
                 take();
-                skipBlankAndLineComments();
-                Node* cont = (la(0).kind == LineTok::T_DELIM_LISTING || la(0).kind == LineTok::T_DELIM_LITERAL ||
-                              la(0).kind == LineTok::T_DELIM_QUOTE   || la(0).kind == LineTok::T_DELIM_EXAMPLE ||
-                              la(0).kind == LineTok::T_DELIM_SIDEBAR || la(0).kind == LineTok::T_DELIM_OPEN ||
-                              la(0).kind == LineTok::T_DELIM_COMMENT )
+                skipBlankLines();
+                Node* cont = FIRST_delimited(la(0).kind)
                              ? parseDelimited(0)
                              : parseParagraphOrLiteral(0);
-                if (cont)
+                if( cont )
                     item->add(cont);
+                skipBlankLines();
             }
 
             lst->add(item);
-            skipBlankAndLineComments();
+            skipBlankLines();
             continue;
         }
 
-        bool ordered = (lst->kv.value("type")=="ordered");
-        if (ordered && la(0).kind != LineTok::T_OL_ITEM)
+        // ordered / unordered
+        const bool ordered = (lst->listType == Node::LT_Ordered);
+        if( ordered && la(0).kind != LineTok::T_OL_ITEM )
             break;
-        if (!ordered && la(0).kind != LineTok::T_UL_ITEM)
+        if( !ordered && la(0).kind != LineTok::T_UL_ITEM)
             break;
 
         LineTok itTok = take();
-        Node* item = new Node(Node::K_ListItem);
-        item->pos = SourcePos(itTok.lineNo, 1);
-        item->kv.insert("markerLevel", QString::number(itTok.level));
+        const QChar marker = ordered ? '.' : '*';
+        const int lvl = markerLevel(itTok.raw, marker);
+        QString payload = markerText(itTok.raw, marker);
 
-        // Checklist detection (simplified): starts with "[*]" "[x]" "[ ]"
-        QString payload = itTok.rest;
-        if (payload.startsWith("[*]") || payload.startsWith("[x]") || payload.startsWith("[ ]")) {
-            item->kv.insert("check", payload.mid(1,1)); // '*','x',' '
+        Node* item = new Node(Node::K_ListItem);
+        item->pos = RowCol(itTok.lineNo, 1);
+        item->level = lvl;
+
+        // checklist detection
+        if( payload.startsWith("[*]")) {
+            item->checkState = Node::CS_Intermediate;
+            payload = payload.mid(3).trimmed();
+        } else if( payload.startsWith("[x]")) {
+            item->checkState = Node::CS_Checked;
+            payload = payload.mid(3).trimmed();
+        } else if( payload.startsWith("[ ]")) {
+            item->checkState = Node::CS_Unchecked;
             payload = payload.mid(3).trimmed();
         }
 
+        // collect wrapped lines belonging to the same paragraph
+        while( la(0).kind == LineTok::T_TEXT) {
+            const QString cont = la(0).raw.trimmed();
+            if( cont.isEmpty() )
+                break;
+            payload += " " + cont;
+            take();
+        }
+
         Node* headPara = new Node(Node::K_Paragraph);
-        headPara->pos = SourcePos(itTok.lineNo, 1);
+        headPara->pos = RowCol(itTok.lineNo, 1);
         headPara->children = parseInlineContent(payload, itTok.lineNo);
         item->add(headPara);
 
-        // Continuations (repeatable)
-        skipBlankAndLineComments();
-        while (la(0).kind == LineTok::T_LIST_CONT) {
+        // list continuations (repeatable)
+        skipBlankLines();
+        while( la(0).kind == LineTok::T_LIST_CONT) {
             take();
-            skipBlankAndLineComments();
+            skipBlankLines();
             Node* cont = parseBlock();
-            if (cont)
-                item->add(cont);
-            skipBlankAndLineComments();
+            if( cont) item->add(cont);
+            skipBlankLines();
         }
 
         lst->add(item);
-        skipBlankAndLineComments();
-
-        // NestedList = blank + List
-        if (la(0).kind == LineTok::T_UL_ITEM || la(0).kind == LineTok::T_OL_ITEM || la(0).kind == LineTok::T_DESC_TERM) {
-            // Let outer loop continue; nested structure can be reconstructed from markerLevel if needed.
-        }
+        skipBlankLines();
     }
 
     return lst;
 }
 
-static QStringList splitOnUnescapedPipe0(const QString& s)
+QList<Node*> Parser::readCells(const LineTok& rowTok)
 {
-    QStringList r; QString cur; int bs = 0;
-    for (int i = 0; i < s.size(); ++i) {
-        const QChar c = s[i];
-        if (c == '|') {
-            if (bs & 1) { cur.chop(1); cur += '|'; }  // "\|" -> "|"
-            else { r << cur; cur.clear(); }
-            bs = 0;
-        } else {
-            cur += c;
-            bs = (c == '\\') ? (bs + 1) : 0;
-        }
+    QList<Node*> cells;
+    const QStringList parts = splitUnescapedPipe(rowTok.raw.trimmed());
+    for( int i = 0; i < parts.size(); ++i) {
+        if( parts[i].isEmpty() && i == 0 )
+            continue;  // skip leading empty before first |
+        Node* cell = new Node(Node::K_TableCell);
+        cell->pos = RowCol(rowTok.lineNo, 1);
+        cell->children = parseInlineContent(parts[i], rowTok.lineNo);
+        cells.append(cell);
     }
-    r << cur;
-    return r;
+    return cells;
 }
 
 Node* Parser::parseTable(BlockMeta* m)
 {
-    // Table = [TableAttributes] |=== content |===
-    // We treat the opening |=== as required.
     LineTok open = la(0);
-    expect(LineTok::T_TABLE_DELIM, "table delimiter |===");
+    if( !expect(LineTok::T_TABLE_DELIM, "table")) {
+        delete m;
+        return 0;
+    }
+
     Node* t = new Node(Node::K_Table);
-    t->pos = SourcePos(open.lineNo, 1);
+    t->pos = RowCol(open.lineNo, 1);
     t->meta = m;
 
-    // Parse rows until closing |=== (same token kind)
-    QList< QList<Node*> > parts;
-    while (!dlex.atEnd()) {
-        if (la(0).kind == LineTok::T_TABLE_DELIM) {
+    QList< QList<Node*> > rowParts;
+
+    while( !dlex.atEnd()) {
+        if( la(0).kind == LineTok::T_TABLE_DELIM) {
             take();
             break;
         }
-        if (la(0).kind == LineTok::T_BLANK) {
+        if( la(0).kind == LineTok::T_BLANK) {
             take();
             continue;
         }
-        if (la(0).kind != LineTok::T_TABLE_LINE) {
+        if( la(0).kind == LineTok::T_TABLE_LINE) {
+            rowParts << readCells(la(0));
             take();
-            continue;
+        } else {
+            take();
         }
-
-        LineTok rowTok = take(); 
-        parts << readCells(rowTok);
     }
-    // TODO: so far only basic table, table with header, and column spec are supported!
-    if( !parts.isEmpty() )
-    {
-        const QList<Node*>& firstRow = parts.first();
-        if( !firstRow.isEmpty() )
-        {
-            Node* row = new Node(Node::K_TableRow);
-            row->pos = firstRow.first()->pos;
-            for( int i = 0; i < firstRow.size(); i++ )
-                row->add(firstRow[i]);
-            t->add(row);
-            QList<Node*> cells;
-            for( int i = 1; i < parts.size(); i++ )
-                cells += parts[i];
-            if( cells.size() % firstRow.size() != 0 )
-                error("the number of cells is not compatible with the table size", firstRow.first()->pos.line, firstRow.first()->pos.column);
-            const int rows = cells.size() / firstRow.size();
+
+    if( !rowParts.isEmpty()) {
+        const QList<Node*>& first = rowParts.first();
+        if( !first.isEmpty()) {
+            // first row defines column count
+            Node* hdr = new Node(Node::K_TableRow);
+            hdr->pos = first.first()->pos;
+            for( int i = 0; i < first.size(); ++i)
+                hdr->add(first[i]);
+            t->add(hdr);
+
+            QList<Node*> flat;
+            for( int r = 1; r < rowParts.size(); ++r)
+                flat += rowParts[r];
+
+            const int nCols = first.size();
+            if( !flat.isEmpty() && flat.size() % nCols != 0)
+                error("cell count not compatible with column count", open.lineNo);
+            const int nRows = nCols > 0 ? flat.size() / nCols : 0;
             int off = 0;
-            for( int r = 0; r < rows; r++ )
-            {
-                row = new Node(Node::K_TableRow);
-                row->pos = cells[off]->pos;
-                for( int i = 0; i < firstRow.size(); i++ )
-                    row->add(cells[off++]);
+            for( int r = 0; r < nRows; ++r) {
+                Node* row = new Node(Node::K_TableRow);
+                row->pos = flat[off]->pos;
+                for( int c = 0; c < nCols; ++c)
+                    row->add(flat[off++]);
                 t->add(row);
             }
         }
@@ -644,47 +759,53 @@ Node* Parser::parseTable(BlockMeta* m)
 
 Node* Parser::parseBlockMacro(BlockMeta* m)
 {
-    // BlockMacro grammar: include::/custom::target[attrs]
     LineTok t = take();
+    const QString s = t.raw.trimmed();
+    int p = s.indexOf("::");
+
     Node* n = new Node(Node::K_BlockMacro);
-    n->pos = SourcePos(t.lineNo, 1);
+    n->pos = RowCol(t.lineNo, 1);
     n->meta = m;
-    n->name = t.head;  // "image", "include", or custom
-    n->target = t.rest; // still contains "path[...]" portion
+    n->name = s.left(p);
+    n->target = s.mid(p+2);
     return n;
 }
 
 Node* Parser::parseDirective(BlockMeta* m)
 {
-    // Directive grammar for ifdef/ifndef/ifeval with nested DocumentBody then endif::[]
     LineTok t = take();
+    const QString s = t.raw.trimmed();
+    int p = s.indexOf("::");
+
     Node* n = new Node(Node::K_Directive);
-    n->pos = SourcePos(t.lineNo, 1);
+    n->pos = RowCol(t.lineNo, 1);
     n->meta = m;
-    n->name = t.head;      // ifdef / ifndef / ifeval / endif
+    n->name = s.left(p);
+    n->text = s.mid(p+2);
 
-    // Minimal: store full directive tail for a later semantic pass.
-    n->text = t.rest;
-
-    // Parse body for ifdef/ifndef/ifeval until matching endif::[] (best-effort)
-    if (n->name == "ifdef" || n->name == "ifndef" || n->name == "ifeval") {
-        while (!dlex.atEnd()) {
-            skipBlankAndLineComments();
-            if (la(0).kind == LineTok::T_DIRECTIVE && la(0).raw.trimmed().startsWith("endif::")) {
-                LineTok end = take();
-                Node* endNode = new Node(Node::K_Directive);
-                endNode->pos = SourcePos(end.lineNo, 1);
-                endNode->name = "endif";
-                endNode->text = end.rest;
-                n->add(endNode);
-                break;
+    // ifdef/ifndef: collect body until endif::
+    if( n->name == "ifdef" || n->name == "ifndef" || n->name == "ifeval") {
+        while( !dlex.atEnd()) {
+            skipBlankLines();
+            if( la(0).kind == LineTok::T_DIRECTIVE) {
+                const QString ds = la(0).raw.trimmed();
+                if( ds.startsWith("endif::")) {
+                    LineTok endTok = take();
+                    int ep = ds.indexOf("::");
+                    Node* endNode = new Node(Node::K_Directive);
+                    endNode->pos = RowCol(endTok.lineNo, 1);
+                    endNode->name = ds.left(ep);
+                    endNode->text = ds.mid(ep+2);
+                    n->add(endNode);
+                    break;
+                }
             }
-            if (dlex.atEnd())
+            if( dlex.atEnd() )
                 break;
-            Node* b = parseBlock();
-            if (!b)
+            Node* body = parseBlock();
+            if( !body)
                 break;
-            n->add(b);
+            n->add(body);
         }
     }
 
@@ -693,45 +814,30 @@ Node* Parser::parseDirective(BlockMeta* m)
 
 Node* Parser::parseBreakOrComment(BlockMeta* m)
 {
-    if (la(0).kind == LineTok::T_LINE_COMMENT) {
+    if( la(0).kind == LineTok::T_LINE_COMMENT) {
         LineTok t = take();
         Node* c = new Node(Node::K_LineComment);
-        c->pos = SourcePos(t.lineNo, 1);
+        c->pos = RowCol(t.lineNo, 1);
         c->meta = m;
-        c->text = t.rest;
+        c->text = t.raw.trimmed().mid(2);
         return c;
     }
-    if (la(0).kind == LineTok::T_THEMATIC) {
+    if( la(0).kind == LineTok::T_THEMATIC) {
         LineTok t = take();
         Node* b = new Node(Node::K_ThematicBreak);
-        b->pos = SourcePos(t.lineNo, 1);
+        b->pos = RowCol(t.lineNo, 1);
         b->meta = m;
-        b->text = t.raw.trimmed();
         return b;
     }
-    if (la(0).kind == LineTok::T_PAGEBREAK) {
+    if( la(0).kind == LineTok::T_PAGEBREAK) {
         LineTok t = take();
-        Node* p = new Node(Node::K_PageBreak);
-        p->pos = SourcePos(t.lineNo, 1);
-        p->meta = m;
-        p->text = t.rest;
-        return p;
+        Node* pb = new Node(Node::K_PageBreak);
+        pb->pos = RowCol(t.lineNo, 1);
+        pb->meta = m;
+        return pb;
     }
-    // fallback
     delete m;
     return 0;
-}
-
-// -------- Inline parsing (greedy, recursive) --------
-
-void Parser::pushText(QList<Node*>& out, const QString& t, int lineNo)
-{
-    if (t.isEmpty())
-        return;
-    Node* n = new Node(Node::K_Text);
-    n->pos = SourcePos(lineNo, 1);
-    n->text = t;
-    out.append(n);
 }
 
 QList<Node*> Parser::parseInlineContent(const QString& s, int lineNo)
@@ -739,287 +845,190 @@ QList<Node*> Parser::parseInlineContent(const QString& s, int lineNo)
     return parseInlineContentRec(s, lineNo, 0);
 }
 
+void Parser::pushText(QList<Node*>& out, const QString& t, int lineNo)
+{
+    if( t.isEmpty() )
+        return;
+    Node* n = new Node(Node::K_Text);
+    n->pos = RowCol(lineNo, 1);
+    n->text = t;
+    out.append(n);
+}
+
 QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int depth)
 {
-    // This is a pragmatic full-coverage scanner: it recognizes the inline element families
-    // and preserves everything else as text.
     QList<Node*> out;
+    if( depth > 8) {
+        pushText(out, s, lineNo);
+        return out;
+    }
+
     QString acc;
+    int i = 0;
+    while( i < s.size()) {
 
-    int i=0;
-    while (i < s.size()) {
-        // Attribute reference: {name}
-        if (s[i] == '{') {
+        // escape: \CHAR produces literal CHAR
+        if( s[i] == '\\' && i + 1 < s.size()) {
+            acc.append(s[i+1]);
+            i += 2;
+            continue;
+        }
+
+        // hard line break: embedded \n from " +" continuation
+        if( s[i] == '\n') {
+            pushText(out, acc, lineNo); acc.clear();
+            Node* br = new Node(Node::K_LineBreak);
+            br->pos = RowCol(lineNo, 1);
+            out.append(br);
+            ++i;
+            continue;
+        }
+
+        // attribute reference {name}
+        if( s[i] == '{') {
             int j = s.indexOf('}', i+1);
-            if (j > i+1) {
+            if( j > i+1) {
                 pushText(out, acc, lineNo); acc.clear();
-                Node* n = new Node(Node::K_AttrRef);
-                n->pos = SourcePos(lineNo, 1);
-                n->name = s.mid(i+1, j-i-1).trimmed();
-                out.append(n);
-                i = j+1;
+                Node* ar = new Node(Node::K_AttrRef);
+                ar->pos = RowCol(lineNo, 1);
+                ar->name = s.mid(i+1, j-(i+1));
+                out.append(ar);
+                i = j + 1;
                 continue;
             }
         }
 
-        // Cross reference: <<id,text>>
-        if (i+1 < s.size() && s[i]=='<' && s[i+1]=='<') {
-            int j = s.indexOf(">>", i+2);
-            if (j > i+2) {
+        // cross-reference <<id,text>>
+        if( matchAt(s, i, "<<", 2)) {
+            int j = findDelim(s, i+2, ">>", 2);
+            if( j > i+2) {
                 pushText(out, acc, lineNo); acc.clear();
-                QString inner = s.mid(i+2, j-(i+2));
+                Node* xr = new Node(Node::K_Xref);
+                xr->pos = RowCol(lineNo, 1);
+                const QString inner = s.mid(i+2, j-(i+2));
                 int comma = inner.indexOf(',');
-                Node* x = new Node(Node::K_Xref);
-                x->pos = SourcePos(lineNo, 1);
-                if (comma < 0) {
-                    x->target = inner.trimmed();
-                } else {
-                    x->target = inner.left(comma).trimmed();
-                    x->children = parseInlineContentRec(inner.mid(comma+1).trimmed(), lineNo, depth+1);
-                }
-                out.append(x);
-                i = j+2;
-                continue;
-            }
-        }
-
-        // Inline anchor: [[id,...]]
-        if (i+1 < s.size() && s[i]=='[' && s[i+1]=='[') {
-            int j = s.indexOf("]]", i+2);
-            if (j > i+2) {
-                pushText(out, acc, lineNo); acc.clear();
-                QString inner = s.mid(i+2, j-(i+2));
-                int comma = inner.indexOf(',');
-                Node* a = new Node(Node::K_AnchorInline);
-                a->pos = SourcePos(lineNo, 1);
-                if (comma < 0)
-                    a->name = inner.trimmed();
+                if( comma < 0)
+                    xr->target = inner.trimmed();
                 else {
-                    a->name = inner.left(comma).trimmed();
-                    a->children = parseInlineContentRec(inner.mid(comma+1).trimmed(), lineNo, depth+1);
+                    xr->target = inner.left(comma).trimmed();
+                    xr->children = parseInlineContentRec(inner.mid(comma+1).trimmed(), lineNo, depth+1);
                 }
-                out.append(a);
-                i = j+2;
+                out.append(xr);
+                i = j + 2;
                 continue;
             }
         }
 
-        // URL auto link (scheme + path)
-        if (isUrlSchemeStart(s, i)) {
-            // consume until whitespace or '[' or ']'
-            int j=i;
-            while (j<s.size() && !s[j].isSpace() && s[j] != '[' && s[j] != ']')
-                ++j;
-            if (j > i+5) {
+        // bibliography anchor [[[id]]] (must check before [[id]])
+        if( matchAt(s, i, "[[[", 3)) {
+            int j = findDelim(s, i+3, "]]]", 3);
+            if( j > i+3) {
                 pushText(out, acc, lineNo); acc.clear();
-                Node* l = new Node(Node::K_Link);
-                l->pos = SourcePos(lineNo, 1);
-                l->target = s.mid(i, j-i);
-                out.append(l);
-                i = j;
+                Node* an = new Node(Node::K_AnchorInline);
+                an->pos = RowCol(lineNo, 1);
+                an->name = s.mid(i+3, j-(i+3));
+                out.append(an);
+                i = j + 3;
                 continue;
             }
         }
 
-        // TODO: inline image image: and automatic image block detection
-        // TODO: inline latexmath: and automatic formula block detection
-        // TODO: index ((TEXT_RUN)) and (((TEXT_RUN)))
+        // inline anchor [[id]]
+        if( matchAt(s, i, "[[", 2)) {
+            int j = findDelim(s, i+2, "]]", 2);
+            if( j > i+2) {
+                pushText(out, acc, lineNo); acc.clear();
+                Node* an = new Node(Node::K_AnchorInline);
+                an->pos = RowCol(lineNo, 1);
+                an->name = s.mid(i+2, j-(i+2));
+                out.append(an);
+                i = j + 2;
+                continue;
+            }
+        }
 
-        // Inline macro: name:...[...] (best-effort)
-        {
+        // URL autolink
+        if( isUrlSchemeStart(s, i)) {
+            pushText(out, acc, lineNo); acc.clear();
+            int j = i;
+            while( j < s.size() && !s[j].isSpace() && s[j] != '[')
+                ++j;
+            Node* lk = new Node(Node::K_Link);
+            lk->pos = RowCol(lineNo, 1);
+            lk->target = s.mid(i, j-i);
+            // URL[text]
+            if( j < s.size() && s[j] == '[') {
+                int rb = s.indexOf(']', j+1);
+                if( rb > j) {
+                    lk->children = parseInlineContentRec(s.mid(j+1, rb-(j+1)), lineNo, depth+1);
+                    j = rb + 1;
+                }
+            }
+            out.append(lk);
+            i = j;
+            continue;
+        }
+
+        // inline macro: name:target[attrs]
+        if( s[i].isLetter()) {
             int colon = s.indexOf(':', i);
-            if (colon == i) { /* ignore */ }
-            if (colon > i) {
-                // potential name
-                bool ok = true;
-                for (int k=i;k<colon;++k) {
-                    QChar ch = s[k];
-                    if (!(ch.isLetterOrNumber() || ch=='_' || ch=='-')) {
-                        ok=false;
+            if( colon > i && colon + 1 < s.size() && s[colon+1] != ':' && s[colon+1] != ' ') {
+                const QString macroName = s.mid(i, colon-i);
+
+                if( isInlineMacroName(macroName)) {
+                    int lb = s.indexOf('[', colon+1);
+
+                    if( lb > colon && lb < s.size()) {
+                        int rb = s.indexOf(']', lb+1);
+
+                        if( rb > lb) {
+                            pushText(out, acc, lineNo); acc.clear();
+                            Node* mn = new Node(Node::K_InlineMacro);
+                            mn->pos = RowCol(lineNo, 1);
+                            mn->name = macroName;
+                            mn->target = s.mid(colon+1, lb-(colon+1));
+                            const QString inner = s.mid(lb+1, rb-(lb+1));
+                            if( !inner.isEmpty())
+                                mn->children = parseInlineContentRec(inner, lineNo, depth+1);
+                            out.append(mn);
+                            i = rb + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        // formatting delimiters (table-driven)
+        {
+            bool matched = false;
+            for( int d = 0; d < inlineDelimCount; ++d) {
+                const InlineDelim& dl = inlineDelims[d];
+
+                if( matchAt(s, i, dl.open, dl.openLen)) {
+                    int j = findDelim(s, i + dl.openLen, dl.close, dl.closeLen);
+
+                    if( j > i + dl.openLen) {
+                        pushText(out, acc, lineNo); acc.clear();
+                        Node* n = new Node(dl.kind);
+                        n->pos = RowCol(lineNo, 1);
+                        const QString inner = s.mid(i + dl.openLen, j - (i + dl.openLen));
+                        if( dl.recurse)
+                            n->children = parseInlineContentRec(inner, lineNo, depth+1);
+                        else
+                            n->text = inner;
+                        out.append(n);
+                        i = j + dl.closeLen;
+                        matched = true;
                         break;
                     }
                 }
-                if (ok && colon+1 < s.size()) {
-                    int lb = s.indexOf('[', colon+1);
-                    int rb = s.indexOf(']', lb+1);
-                    if (lb > colon && rb > lb) {
-                        pushText(out, acc, lineNo); acc.clear();
-                        Node* m = new Node(Node::K_InlineMacro);
-                        m->pos = SourcePos(lineNo, 1);
-                        m->name = s.mid(i, colon-i);
-                        // target is the segment after ":" up to "[" (can be empty for kbd:[...])
-                        m->target = s.mid(colon+1, lb-(colon+1));
-                        QString inner = s.mid(lb+1, rb-(lb+1));
-                        m->children = parseInlineContentRec(inner, lineNo, depth+1);
-                        out.append(m);
-                        i = rb+1;
-                        continue;
-                    }
-                }
             }
+            if( matched )
+                continue;
         }
 
-        // Formatting / passthrough: recognize pairs/triples first
-        // **...**, __...__, ``...``, +++...+++, ++...++, +...+, #...#, ^...^, ~...~
-        struct Del {
-            QString open;
-            QString close;
-            Node::Kind kind;
-        };
-        Del dels[] = {
-            { "***", "***", Node::K_PassthroughInline }, // not in grammar; kept as passthrough safeguard
-        };
-        Q_UNUSED(dels);
-
-        // **bold** (unconstrained)
-        if (s.mid(i,2)=="**") {
-            int j = s.indexOf("**", i+2);
-            if (j > i+2) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Emph);
-                e->pos = SourcePos(lineNo, 1);
-                e->name = "bold";
-                e->children = parseInlineContentRec(s.mid(i+2, j-(i+2)), lineNo, depth+1);
-                out.append(e);
-                i = j+2;
-                continue;
-            }
-        }
-        // *bold* (constrained)
-        if (s[i]=='*') {
-            int j = s.indexOf('*', i+1);
-            if (j > i+1) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::   K_Emph);
-                e->pos = SourcePos(lineNo, 1);
-                e->name = "bold";
-                e->children = parseInlineContentRec(s.mid(i+1, j-(i+1)), lineNo, depth+1);
-                out.append(e);
-                i = j+1;
-                continue;
-            }
-        }
-        // __italic__ (unconstrained)
-        if (s.mid(i,2)=="__") {
-            int j = s.indexOf("__", i+2);
-            if (j > i+2) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Emph);
-                e->pos = SourcePos(lineNo, 1);
-                e->name = "italic";
-                e->children = parseInlineContentRec(s.mid(i+2, j-(i+2)), lineNo, depth+1);
-                out.append(e);
-                i = j+2;
-                continue;
-            }
-        }
-        // _italic_ (constrained)
-        if (s[i]=='_') {
-            int j = s.indexOf('_', i+1);
-            if (j > i+1) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Emph);
-                e->pos = SourcePos(lineNo, 1);
-                e->name = "italic";
-                e->children = parseInlineContentRec(s.mid(i+1, j-(i+1)), lineNo, depth+1);
-                out.append(e);
-                i = j+1;
-                continue;
-            }
-        }
-        // ``mono`` (unconstrained)
-        if (s.mid(i,2)=="``") {
-            int j = s.indexOf("``", i+2);
-            if (j > i+2) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Emph);
-                e->pos = SourcePos(lineNo, 1);
-                e->name = "mono";
-                e->children = parseInlineContentRec(s.mid(i+2, j-(i+2)), lineNo, depth+1);
-                out.append(e);
-                i = j+2;
-                continue;
-            }
-        }
-        // `mono` (constrained)
-        if (s[i]=='`') {
-            int j = s.indexOf('`', i+1);
-            if (j > i+1) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Emph);
-                e->pos = SourcePos(lineNo, 1);
-                e->name = "mono";
-                e->text = s.mid(i+1, j-(i+1)); // keep as raw text run
-                out.append(e);
-                i = j+1;
-                continue;
-            }
-        }
-        // #highlight#
-        if (s[i]=='#') {
-            int j = s.indexOf('#', i+1);
-            if (j > i+1) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Emph);
-                e->pos = SourcePos(lineNo, 1);
-                e->name = "highlight";
-                e->children = parseInlineContentRec(s.mid(i+1, j-(i+1)), lineNo, depth+1);
-                out.append(e);
-                i = j+1;
-                continue;
-            }
-        }
-        // ^sup^
-        if (s[i]=='^') {
-            int j = s.indexOf('^', i+1);
-            if (j > i+1) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Superscript);
-                e->pos = SourcePos(lineNo, 1);
-                e->text = s.mid(i+1, j-(i+1));
-                out.append(e);
-                i = j+1;
-                continue;
-            }
-        }
-        // ~sub~
-        if (s[i]=='~') {
-            int j = s.indexOf('~', i+1);
-            if (j > i+1) {
-                pushText(out, acc, lineNo); acc.clear();
-                Node* e = new Node(Node::K_Subscript);
-                e->pos = SourcePos(lineNo, 1);
-                e->text = s.mid(i+1, j-(i+1));
-                out.append(e);
-                i = j+1;
-                continue;
-            }
-        }
-#if 0
-        // not supported
-        // passthrough: +...+ / ++...++ / +++...+++ (nested parsing allowed by grammar)
-        if (s[i]=='+') {
-            int plusN=1;
-            while (i+plusN<s.size() && s[i+plusN]=='+')
-                ++plusN;
-            if (plusN>=1 && plusN<=3) {
-                QString fence(plusN, '+');
-                int j = s.indexOf(fence, i+plusN);
-                if (j > i+plusN) {
-                    pushText(out, acc, lineNo); acc.clear();
-                    Node* p = new Node(Node::K_PassthroughInline);
-                    p->pos = SourcePos(lineNo, 1);
-                    p->kv.insert("plusN", QString::number(plusN));
-                    p->children = parseInlineContentRec(s.mid(i+plusN, j-(i+plusN)), lineNo, depth+1);
-                    out.append(p);
-                    i = j+plusN;
-                    continue;
-                }
-            }
-        }
-#endif
-
-        // default char
+        // default: accumulate character
         acc.append(s[i]);
         ++i;
     }
@@ -1027,7 +1036,3 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
     pushText(out, acc, lineNo);
     return out;
 }
-
-} // namespace LeanDoc2
-
-
