@@ -20,7 +20,6 @@
 #include "LeanDocParser2.h"
 using namespace LeanDoc;
 
-
 static inline bool FIRST_section(int k) {
     return k == LineTok::T_SECTION;
 }
@@ -45,8 +44,23 @@ static inline bool terminatesParagraph(int k) {
            k == LineTok::T_TABLE_DELIM || FIRST_delimited(k) ||
            k == LineTok::T_ADMONITION || k == LineTok::T_BLOCK_MACRO ||
            k == LineTok::T_DIRECTIVE || FIRST_blockMeta(k) ||
-           k == LineTok::T_THEMATIC || k == LineTok::T_PAGEBREAK ||
+           k == LineTok::T_THEMATIC ||
            k == LineTok::T_LIST_CONT || k == LineTok::T_EOF;
+}
+
+// IDENTIFIER = ( ALPHA | "_" ) ( ALPHA | DIGIT | "_" | "-" )* ;
+static bool isValidIdentifier(const QString& s)
+{
+    if( s.isEmpty())
+        return false;
+    if( !s[0].isLetter() && s[0] != '_')
+        return false;
+    for( int i = 1; i < s.size(); ++i) {
+        const QChar c = s[i];
+        if( !c.isLetterOrNumber() && c != '_' && c != '-')
+            return false;
+    }
+    return true;
 }
 
 static int sectionLevel(const QString& raw) {
@@ -128,9 +142,9 @@ static bool isUrlSchemeStart(const QString& s, int i)
 
 static bool isInlineMacroName(const QString& name)
 {
+    // kbd, btn, menu, pass unsupported
     return name == "image" || name == "link" || name == "mailto" || name == "xref" ||
-           name == "footnote" || name == "kbd" || name == "btn" || name == "menu" ||
-           name == "stem" || name == "latexmath" || name == "pass" || name == "anchor";
+           name == "footnote" || name == "latexmath" || name == "anchor";
 }
 
 static quint8 tokKindToDelimKind(LineTok::Kind k)
@@ -235,29 +249,43 @@ static QStringList splitAttrComma(const QString& s)
             acc.append(c);
         }
     }
-    if( !acc.isEmpty() )
-        out.append(acc);
+    out.append(acc);
     return out;
 }
 
-QMap<QString, QString> Parser::parseAttrList(const QString& bracketed)
+QMap<QString, QString> Parser::parseAttrList(const QString& bracketed, int lineNo)
 {
     QMap<QString, QString> res;
     const QString inner = stripOuter(bracketed.trimmed(), '[', ']');
     if( inner.isEmpty() )
         return res;
     const QStringList parts = splitAttrComma(inner);
+
+    for( int i = 0; i < parts.size(); ++i ) {
+        if( parts[i].trimmed().isEmpty() && parts.size() > 1)
+            error("empty attribute entry (trailing, leading, or double comma)", lineNo);
+    }
+
+    int posIdx = 0;
     for( int i = 0; i < parts.size(); ++i ) {
         const QString p = parts[i].trimmed();
         if( p.isEmpty())
             continue;
         int eq = p.indexOf('=');
-        if( eq > 0)
-            res.insert(p.left(eq).trimmed(), p.mid(eq+1).trimmed());
-        else if( i == 0)
+        if( eq > 0) {
+            const QString key = p.left(eq).trimmed();
+            // validate attribute key name
+            if( !isValidIdentifier(key))
+                error("invalid attribute key '" + key +
+                      "'; must match IDENTIFIER (letter or underscore, then letters/digits/underscore/hyphen)", lineNo);
+            res.insert(key, p.mid(eq+1).trimmed());
+        } else if( posIdx == 0) {
             res.insert("positional0", p);
-        else
-            res.insert(QString("positional%1").arg(i), p);
+            ++posIdx;
+        } else {
+            res.insert(QString("positional%1").arg(posIdx), p);
+            ++posIdx;
+        }
     }
     return res;
 }
@@ -317,13 +345,24 @@ void Parser::parseDocumentHeader(Node* doc)
         }
     }
 
-    // revision line: vN.N...
+    // revision line: vN.N, optional date/remark
     if( la(0).kind == LineTok::T_TEXT) {
         const QString s = la(0).raw.trimmed();
         if( s.size() >= 2 && s[0] == 'v' && s[1].isDigit()) {
-            doc->kv.insert("revisionLine", s);
-            take();
-            skipBlankLines();
+            // validate: must be vDIGITS.DIGITS, optionally followed by ', date' or ', remark'
+            int i = 1;
+            while( i < s.size() && (s[i].isDigit() || s[i] == '.')) 
+                ++i;
+            if( i > 1 && (i >= s.size() || s[i] == ',' || s[i] == ' ')) {
+                doc->kv.insert("revisionLine", s);
+                take();
+                skipBlankLines();
+            } else {
+                error("invalid revision line '" + s +
+                      "'; expected format 'vN.N[, date][, remark]'", la(0).lineNo);
+                take();
+                skipBlankLines();
+            }
         }
     }
 
@@ -336,6 +375,9 @@ void Parser::parseDocumentHeader(Node* doc)
         if( second <= 1)
             break;
         const QString attrName = s.mid(1, second-1).trimmed();
+        if( !isValidIdentifier(attrName))
+            error("invalid document attribute name ':" + attrName +
+                  ":'; must match IDENTIFIER", la(0).lineNo);
         const QString attrVal  = s.mid(second+1).trimmed();
         doc->kv.insert("attr:" + attrName, attrVal);
         take();
@@ -348,6 +390,13 @@ Node* Parser::parseBlock()
     if( meta )
         skipBlankLines(); // block meta may be separated from its block by blank lines
     const int k = la(0).kind;
+
+    if( meta && k == LineTok::T_EOF) {
+        error("dangling block metadata (anchor/attributes/title) not followed by any block",
+              meta->pos.row);
+        delete meta;
+        return 0;
+    }
 
     if( FIRST_section(k))
         return parseSection(meta);
@@ -363,10 +412,24 @@ Node* Parser::parseBlock()
         return parseBlockMacro(meta);
     if( k == LineTok::T_DIRECTIVE)
         return parseDirective(meta);
-    if( k == LineTok::T_THEMATIC || k == LineTok::T_PAGEBREAK || k == LineTok::T_LINE_COMMENT)
+    if( k == LineTok::T_THEMATIC || k == LineTok::T_LINE_COMMENT)
         return parseBreakOrComment(meta);
-    if( k == LineTok::T_TEXT)
+    if( k == LineTok::T_PAGEBREAK) {
+        error("page break '<<<' is not supported by LeanDoc", la(0).lineNo);
+        take();
+        delete meta;
+        return parseBlock();
+    }
+    if( k == LineTok::T_LIST_CONT) {
+        error("list continuation '+' outside of a list context", la(0).lineNo);
+        take();
+        delete meta;
+        return parseBlock();
+    }
+    if( k == LineTok::T_TEXT) {
+        warnNearMissDelimiter(la(0).raw, la(0).lineNo);
         return parseParagraphOrLiteral(meta);
+    }
 
     // unexpected token: skip and retry
     if( k != LineTok::T_EOF) {
@@ -385,9 +448,11 @@ BlockMeta* Parser::parseBlockMetaOpt()
     if( !FIRST_blockMeta(la(0).kind)) return 0;
 
     BlockMeta* m = new BlockMeta();
+    m->pos = RowCol(la(0).lineNo, 1);
 
     while( FIRST_blockMeta(la(0).kind)) {
         if( la(0).kind == LineTok::T_BLOCK_ANCHOR) {
+            const int anchorLine = la(0).lineNo;
             const QString s = take().raw.trimmed();
             const QString inner = s.mid(2, s.size()-4);
             int comma = inner.indexOf(',');
@@ -397,9 +462,14 @@ BlockMeta* Parser::parseBlockMetaOpt()
                 m->anchorId = inner.left(comma).trimmed();
                 m->anchorText = inner.mid(comma+1).trimmed();
             }
+            if( !m->anchorId.isEmpty() && !isValidIdentifier(m->anchorId))
+                error("invalid anchor ID '" + m->anchorId +
+                      "'; must match IDENTIFIER (start with letter/underscore, "
+                      "then letters/digits/underscore/hyphen)", anchorLine);
         } else if( la(0).kind == LineTok::T_BLOCK_ATTRS) {
+            const int attrLine = la(0).lineNo;
             const QString s = take().raw.trimmed();
-            QMap<QString, QString> a = parseAttrList(s);
+            QMap<QString, QString> a = parseAttrList(s, attrLine);
             for( QMap<QString, QString>::ConstIterator it = a.constBegin(); it != a.constEnd(); ++it) {
                 const QString& val = it.value();
                 // handle AsciiDoc shorthand: [#id] [.role] [%option]
@@ -431,6 +501,7 @@ Node* Parser::parseSection(BlockMeta* m)
     n->meta = m;
     n->level = lvl;
     n->name = sectionTitle(t.raw);
+    n->titleChildren = parseInlineContent(n->name, t.lineNo);
 
     while( !dlex.atEnd() ) {
         skipBlankLines();
@@ -439,8 +510,13 @@ Node* Parser::parseSection(BlockMeta* m)
 
         // stop if next section is same or higher level
         if( FIRST_section(la(0).kind)) {
-            if( sectionLevel(la(0).raw) <= lvl)
+            const int nextLvl = sectionLevel(la(0).raw);
+            if( nextLvl <= lvl)
                 break;
+            if( nextLvl > lvl + 1)
+                error("section level jumps from " + QString::number(lvl) +
+                      " to " + QString::number(nextLvl) +
+                      " (expected " + QString::number(lvl + 1) + ")", la(0).lineNo);
         }
 
         // peek past metadata to detect section end
@@ -449,8 +525,14 @@ Node* Parser::parseSection(BlockMeta* m)
             while( FIRST_blockMeta(la(off).kind))
                 ++off;
             if( FIRST_section(la(off).kind) ) {
-                if( sectionLevel(la(off).raw) <= lvl)
+                const int nextLvl = sectionLevel(la(off).raw);
+                if( nextLvl <= lvl)
                     break;
+                // also check through metadata
+                if( nextLvl > lvl + 1)
+                    error("section level jumps from " + QString::number(lvl) +
+                          " to " + QString::number(nextLvl) +
+                          " (expected " + QString::number(lvl + 1) + ")", la(off).lineNo);
             }
         }
 
@@ -535,7 +617,11 @@ Node* Parser::parseDelimited(BlockMeta* m)
         QStringList lines;
         while( !dlex.atEnd() && la(0).kind != k)
             lines << take().raw;
-        expect(k, "closing delimiter");
+        if( dlex.atEnd() || la(0).kind != k)
+            error("unclosed delimited block ('" + open.raw.trimmed() +
+                  "' opened at line " + QString::number(open.lineNo) + ")", la(0).lineNo);
+        else
+            take();
         b->text = lines.join("\n");
         return b;
     }
@@ -550,7 +636,11 @@ Node* Parser::parseDelimited(BlockMeta* m)
             break;
         b->add(inner);
     }
-    expect(k, "closing delimiter");
+    if( dlex.atEnd() || la(0).kind != k)
+        error("unclosed delimited block ('" + open.raw.trimmed() +
+              "' opened at line " + QString::number(open.lineNo) + ")", la(0).lineNo);
+    else
+        take();
     return b;
 }
 
@@ -577,6 +667,10 @@ Node* Parser::parseList(BlockMeta* m)
             int c = 0;
             for( int i = ts.size()-1; i >= 0 && ts[i] == ':'; --i)
                 ++c;
+
+            if( c < 2 || c > 4 )
+                error("description list nesting depth " + QString::number(c) +
+                      " out of range (2..4 colons allowed)", termTok.lineNo);
 
             Node* item = new Node(Node::K_ListItem);
             item->pos = RowCol(termTok.lineNo, 1);
@@ -694,6 +788,18 @@ QList<Node*> Parser::readCells(const LineTok& rowTok)
     return cells;
 }
 
+static int colsCount(const BlockMeta* m)
+{
+    if( !m || !m->attrs.contains("cols"))
+        return 0;
+    QString v = m->attrs.value("cols");
+    if( v.startsWith('"') && v.endsWith('"'))
+        v = v.mid(1, v.size()-2);
+    if( v.isEmpty())
+        return 0;
+    return v.split(',').size();
+}
+
 Node* Parser::parseTable(BlockMeta* m)
 {
     LineTok open = la(0);
@@ -706,7 +812,12 @@ Node* Parser::parseTable(BlockMeta* m)
     t->pos = RowCol(open.lineNo, 1);
     t->meta = m;
 
-    QList< QList<Node*> > rowParts;
+    // collect all cells into a flat list; track first blank-line position
+    // and max cells-per-line (for column count fallback)
+    QList<Node*> allCells;
+    int firstBlankPos = -1; // cell index at which first blank line after cells occurs
+    int firstLineCells = 0; // cells produced by the first TABLE_LINE
+    bool seenCell = false;
 
     while( !dlex.atEnd()) {
         if( la(0).kind == LineTok::T_TABLE_DELIM) {
@@ -714,45 +825,52 @@ Node* Parser::parseTable(BlockMeta* m)
             break;
         }
         if( la(0).kind == LineTok::T_BLANK) {
+            if( seenCell && firstBlankPos < 0)
+                firstBlankPos = allCells.size();
             take();
             continue;
         }
         if( la(0).kind == LineTok::T_TABLE_LINE) {
-            rowParts << readCells(la(0));
+            QList<Node*> cells = readCells(la(0));
+            if( !seenCell)
+                firstLineCells = cells.size();
+            allCells += cells;
+            seenCell = true;
             take();
         } else {
             take();
         }
     }
 
-    if( !rowParts.isEmpty()) {
-        const QList<Node*>& first = rowParts.first();
-        if( !first.isEmpty()) {
-            // first row defines column count
-            Node* hdr = new Node(Node::K_TableRow);
-            hdr->pos = first.first()->pos;
-            for( int i = 0; i < first.size(); ++i)
-                hdr->add(first[i]);
-            t->add(hdr);
+    if( allCells.isEmpty())
+        return t;
 
-            QList<Node*> flat;
-            for( int r = 1; r < rowParts.size(); ++r)
-                flat += rowParts[r];
+    // determine column count: cols attribute > header row boundary > first line cells
+    int nCols = colsCount(m);
+    if( nCols <= 0 && firstBlankPos > 0)
+        nCols = firstBlankPos;
+    if( nCols <= 0 && firstLineCells > 1)
+        nCols = firstLineCells;
+    if( nCols <= 0)
+        nCols = allCells.size(); // single-row table
 
-            const int nCols = first.size();
-            if( !flat.isEmpty() && flat.size() % nCols != 0)
-                error("cell count not compatible with column count", open.lineNo);
-            const int nRows = nCols > 0 ? flat.size() / nCols : 0;
-            int off = 0;
-            for( int r = 0; r < nRows; ++r) {
-                Node* row = new Node(Node::K_TableRow);
-                row->pos = flat[off]->pos;
-                for( int c = 0; c < nCols; ++c)
-                    row->add(flat[off++]);
-                t->add(row);
-            }
-        }
+    if( allCells.size() % nCols != 0)
+        error("cell count not evenly divisible by column count", open.lineNo);
+
+    // group cells into rows
+    const int nRows = nCols > 0 ? allCells.size() / nCols : 0;
+    int off = 0;
+    for( int r = 0; r < nRows; ++r) {
+        Node* row = new Node(Node::K_TableRow);
+        row->pos = allCells[off]->pos;
+        for( int c = 0; c < nCols && off < allCells.size(); ++c)
+            row->add(allCells[off++]);
+        t->add(row);
     }
+
+    // blank line after first row promotes it to header
+    if( firstBlankPos == nCols)
+        t->kv.insert("header", "true");
 
     return t;
 }
@@ -782,6 +900,9 @@ Node* Parser::parseDirective(BlockMeta* m)
     n->meta = m;
     n->name = s.left(p);
     n->text = s.mid(p+2);
+
+    if( n->name == "ifeval")
+        error("'ifeval' directive is not supported by LeanDoc", t.lineNo);
 
     // ifdef/ifndef: collect body until endif::
     if( n->name == "ifdef" || n->name == "ifndef" || n->name == "ifeval") {
@@ -1035,4 +1156,40 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
 
     pushText(out, acc, lineNo);
     return out;
+}
+
+void Parser::warnNearMissDelimiter(const QString& raw, int lineNo)
+{
+    // warn on lines that look like delimiters but have wrong length
+    const QString s = raw.trimmed();
+    if( s.size() < 3)
+        return;
+
+    struct { QChar ch; const char* name; int exact; } pats[] = {
+        { '-', "listing (----)", 4 },
+        { '.', "literal (....)", 4 },
+        { '_', "quote (____)", 4 },
+        { '=', "example (====)", 4 },
+        { '*', "sidebar (****)", 4 },
+        { '/', "comment (////)", 4 }
+    };
+    const int npats = (int)(sizeof(pats) / sizeof(pats[0]));
+
+    // check if entire line is one repeated char
+    bool uniform = true;
+    for( int i = 1; i < s.size(); ++i) {
+        if( s[i] != s[0]) { uniform = false; break; }
+    }
+    if( !uniform)
+        return;
+
+    for( int p = 0; p < npats; ++p) {
+        if( s[0] == pats[p].ch && s.size() != pats[p].exact && s.size() >= 3) {
+            error("line of " + QString::number(s.size()) + " '" + s[0] +
+                  "' characters looks like a " + pats[p].name +
+                  " delimiter but has wrong length (expected exactly " +
+                  QString::number(pats[p].exact) + ")", lineNo);
+            return;
+        }
+    }
 }

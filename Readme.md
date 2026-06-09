@@ -71,8 +71,8 @@ no `kbd:`, `btn:`, `menu:` macros,
 
 - [x] Derive a new, lean subset from AsciiDoc with a similar syntax, but parseable and with no ambiguity
 - [x] Lexer, parser, AST 
-- [ ] Semantic validator
-- [x] Processing includes and conditional compilation
+- [x] Semantic validator
+- [ ] Processing includes and conditional compilation
 - [x] Typst generator (WIP)
 - [ ] Integration with Typos engine
 

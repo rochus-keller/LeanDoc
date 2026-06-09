@@ -68,8 +68,9 @@ private:
     void error(const QString& msg, int row, int col = 1);
     void skipBlankLines();
 
-    static QMap<QString, QString> parseAttrList(const QString& bracketed);
+    QMap<QString, QString> parseAttrList(const QString& bracketed, int lineNo);
     static QString stripOuter(const QString& s, QChar a, QChar b);
+    void warnNearMissDelimiter(const QString& s, int lineNo);
 
     Lexer dlex;
 };

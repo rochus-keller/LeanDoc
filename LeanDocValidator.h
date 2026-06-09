@@ -48,11 +48,17 @@ private:
     void checkTableAttrs(const Node* n);
     void checkBlockAttrs(const Node* n);
     void checkXref(const Node* n);
+    void checkSourceAttrContext(const Node* n);
+    void checkRoleContext(const Node* n);
+    void checkColsOnNonTable(const Node* n);
+    void checkTableCellCount(const Node* n);
+    void checkAdmonitionAttrContext(const Node* n);
 
     void warn(int line, const QString& msg);
     void error(int line, const QString& msg);
 
     QSet<QString> danchors; // declared anchor IDs
+    QMap<QString, int> danchorLines; // anchor ID -> first occurrence line
 };
 
 } // namespace LeanDoc

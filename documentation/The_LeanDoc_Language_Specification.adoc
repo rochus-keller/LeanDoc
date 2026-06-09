@@ -1,3 +1,5 @@
+// LeanDoc 2026-06-09
+
 // This file may be used under the terms of the GNU General Public
 // License (GPL) versions 2.0 or 3.0 as published by the Free Software
 // Foundation, see http://www.gnu.org/copyleft/gpl.html for more information
@@ -10,7 +12,7 @@
 
 === Version
 
-2026-06-08, work in progress
+2026-06-09, work in progress
 
 === Author
 
@@ -778,7 +780,8 @@ opens the link in a new window.
 
 *Anchors*: `\[[id]]` defines a target for cross-referencing. Place it
 before any block. Section headings also generate automatic anchors from
-their text.
+their text. Anchor IDs are case-sensitive. [[MyId]] and [[myid]] define 
+distinct anchors. Cross-references must match the declared ID exactly.
 
 *Cross-references*: `\<<id>>` links to an anchor within the same
 document. `\<<id, display text>>` provides custom display text.

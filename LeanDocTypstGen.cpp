@@ -194,12 +194,18 @@ bool TypstGenerator::emitNode(const Node* n, QTextStream& out, TypstGenError* er
 
 bool TypstGenerator::emitSection(const Node* n, QTextStream& out, TypstGenError* err, int headingShift)
 {
-    Q_UNUSED(err);
     int level = n->level + headingShift;
     if( level < 1 )
         level = 1;
 
-    out << headingMarks(level) << " " << escText(n->name) << labelSuffix(n->meta) << "\n\n";
+    out << headingMarks(level) << " ";
+    if( !n->titleChildren.isEmpty()) {
+        if( !emitInlineSeq(n->titleChildren, out, err))
+            return false;
+    } else {
+        out << escText(n->name);
+    }
+    out << labelSuffix(n->meta) << "\n\n";
     for( int i=0;i<n->children.size();++i ) {
         if( !emitNode(n->children[i], out, err, headingShift))
             return false;
@@ -212,7 +218,7 @@ bool TypstGenerator::emitParagraph(const Node* n, QTextStream& out, TypstGenErro
 {
     if( !emitInlineSeq(n->children, out, err))
         return false;
-    out << "\n";
+    out << labelSuffix(n->meta) << "\n";
     return true;
 }
 
@@ -228,7 +234,7 @@ bool TypstGenerator::emitAdmonition(const Node* n, QTextStream& out, TypstGenErr
     out << "#admon(\"" << escString(n->name) << "\", [";
     if( !emitInlineSeq(n->children, out, err))
         return false;
-    out << "])\n";
+    out << "])" << labelSuffix(n->meta) << "\n";
     return true;
 }
 
@@ -237,6 +243,7 @@ bool TypstGenerator::emitDelimited(const Node* n, QTextStream& out, TypstGenErro
     if( n->delimKind == Node::DK_Comment)
         return true;
 
+    const QString lbl = labelSuffix(n->meta);
     if( !n->children.isEmpty()) {
         out << "#block([";
         for( int i=0;i<n->children.size();++i) {
@@ -244,11 +251,11 @@ bool TypstGenerator::emitDelimited(const Node* n, QTextStream& out, TypstGenErro
                 return false;
             out << "\n";
         }
-        out << "])\n";
+        out << "])" << lbl << "\n";
         return true;
     }
 
-    out << "#raw(\"" << escString(n->text) << "\", block: true)\n";
+    out << "#raw(\"" << escString(n->text) << "\", block: true)" << lbl << "\n";
     return true;
 }
 
@@ -268,7 +275,7 @@ bool TypstGenerator::emitList(const Node* n, QTextStream& out, TypstGenError* er
             }
             out << "],\n";
         }
-        out << ")\n";
+        out << ")" << labelSuffix(n->meta) << "\n";
         return true;
     }
 
@@ -288,8 +295,40 @@ bool TypstGenerator::emitList(const Node* n, QTextStream& out, TypstGenError* er
         }
         out << "],\n";
     }
-    out << ")\n";
+    out << ")" << labelSuffix(n->meta) << "\n";
     return true;
+}
+
+static QString typstColSpec(const BlockMeta* m, int fallbackCols)
+{
+    if( !m || !m->attrs.contains("cols"))
+        return QString::number(fallbackCols);
+
+    // parse cols="1,2,3" into (1fr, 2fr, 3fr)
+    QString v = m->attrs.value("cols");
+    if( v.startsWith('"') && v.endsWith('"'))
+        v = v.mid(1, v.size()-2);
+    const QStringList parts = v.split(',');
+
+    // check if all parts are numeric (relative widths)
+    bool allNumeric = true;
+    for( int i = 0; i < parts.size(); ++i) {
+        bool ok = false;
+        parts[i].trimmed().toInt(&ok);
+        if( !ok) { allNumeric = false; break; }
+    }
+
+    if( allNumeric && !parts.isEmpty()) {
+        QString r = "(";
+        for( int i = 0; i < parts.size(); ++i) {
+            if( i > 0) r += ", ";
+            r += parts[i].trimmed() + "fr";
+        }
+        r += ")";
+        return r;
+    }
+
+    return QString::number(fallbackCols);
 }
 
 bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* err)
@@ -305,13 +344,18 @@ bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* e
     if( cols <= 0)
         return true;
 
-    out << "#table(columns: " << cols << ",\n";
+    const bool hasHeader = n->kv.contains("header") ||
+        (n->meta && n->meta->attrs.contains("options") &&
+         n->meta->attrs.value("options").contains("header"));
+
+    out << "#table(columns: " << typstColSpec(n->meta, cols) << ",\n";
+    if( hasHeader)
+        out << "  table.header(\n";
+
     for( int i=0;i<n->children.size();++i) {
         const Node* row = n->children[i];
         if( !row || row->kind != Node::K_TableRow)
             continue;
-        if( row->children.size() != cols)
-            return failAt(err, row, "Table row has inconsistent number of cells");
 
         for( int c=0;c<row->children.size();++c) {
             const Node* cell = row->children[c];
@@ -322,8 +366,10 @@ bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* e
             }
             out << "],\n";
         }
+        if( hasHeader && i == 0)
+            out << "  ),\n";
     }
-    out << ")\n";
+    out << ")" << labelSuffix(n->meta) << "\n";
     return true;
 }
 
@@ -336,7 +382,7 @@ bool TypstGenerator::emitBlockMacro(const Node* n, QTextStream& out, TypstGenErr
         QString t = n->target.trimmed();
         int lb = t.indexOf('[');
         QString path = (lb < 0) ? t : t.left(lb).trimmed();
-        out << "#image(\"" << escString(path) << "\")\n";
+        out << "#image(\"" << escString(path) << "\")" << labelSuffix(n->meta) << "\n";
         return true;
     }
 
@@ -426,9 +472,9 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
 
     case Node::K_Xref:
         if( n->children.isEmpty()) {
-            out << "@" << escText(n->target);
+            out << "#link(<" << n->target << ">)[" << escText(n->target) << "]";
         } else {
-            out << "#link(<" << escText(n->target) << ">)[";
+            out << "#link(<" << n->target << ">)[";
             if( !emitInlineSeq(n->children, out, err))
                 return false;
             out << "]";
@@ -436,7 +482,7 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
         return true;
 
     case Node::K_AnchorInline:
-        out << "<" << escText(n->name) << ">";
+        out << "#metadata(none) <" << n->name << ">";
         return true;
 
     case Node::K_AttrRef:

@@ -36,6 +36,7 @@ struct RowCol {
 };
 
 struct BlockMeta {
+    RowCol pos;
     QString anchorId;
     QString anchorText;
     QString title;
@@ -115,12 +116,15 @@ public:
     QMap<QString, QString> kv; // document header attrs, dynamic attrs
 
     QList<Node*> children;
+    QList<Node*> titleChildren; // parsed inline content of section title
     void add(Node* n) { children.append(n); }
 
     static void deleteTree(Node* n) {
         if (!n) return;
         for (int i=0;i<n->children.size();++i)
             deleteTree(n->children[i]);
+        for (int i=0;i<n->titleChildren.size();++i)
+            deleteTree(n->titleChildren[i]);
         delete n->meta;
         delete n;
     }
