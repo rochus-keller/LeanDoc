@@ -22,8 +22,11 @@
 #include <QtCore/QFile>
 #include <QtCore/QTextStream>
 
+#include <QFileInfo>
+
 #include "LeanDocLexer2.h"
 #include "LeanDocParser2.h"
+#include "LeanDocPreprocessor.h"
 #include "LeanDocTypstGen.h"
 #include "LeanDocAst2.h"
 #include "LeanDocValidator.h"
@@ -64,12 +67,13 @@ int main(int argc, char** argv)
     const QStringList args = app.arguments();
     if (args.size() < 2) {
         err << "Usage:\n"
-            << "  leandoc2typst <in.adoc> -o <out.typ> [--template plain|report] [--template-file tpl.typ]\n"
-            << "  leandoc2typst --ast <in.adoc>\n";
+            << "  leandoc --typst <in.adoc> -o <out.typ> [--template plain|report] [--template-file tpl.typ]\n"
+            << "  leandoc --ast <in.adoc>\n"
+            << "  leandoc <in.adoc>\n";
         return 2;
     }
 
-    bool modeAst = false, modeTypst = true;
+    bool modeAst = false, modeTypst = false;
     QString inPath, outPath = "output.typ";
     TypstGenerator::Options genOpt;
 
@@ -78,6 +82,9 @@ int main(int argc, char** argv)
         if (a == "--ast") {
             modeAst = true;
             modeTypst = false;
+        } else if (a == "--typst") {
+            modeAst = false;
+            modeTypst = true;
         } else if (a == "-o" && i+1 < args.size())
             outPath = args[++i];
         else if (a == "--template" && i+1 < args.size())
@@ -111,6 +118,12 @@ int main(int argc, char** argv)
     for (int i = 0; i < parser.errors.size(); ++i)
         err << "Error at line " << parser.errors[i].pos.row << ": " << parser.errors[i].message << "\n";
 
+    Preprocessor preproc;
+    preproc.setBaseDir(QFileInfo(inPath).absolutePath());
+    preproc.process(doc);
+    for (int i = 0; i < preproc.errors.size(); ++i)
+        err << "Error at line " << preproc.errors[i].line << ": " << preproc.errors[i].message << "\n";
+
     // validation pass
     Validator validator;
     validator.validate(doc);
@@ -120,31 +133,42 @@ int main(int argc, char** argv)
             << " at line " << d.line << ": " << d.message << "\n";
     }
 
+    const bool hasErrors = !(parser.errors.isEmpty() && validator.diagnostics.isEmpty() && preproc.errors.isEmpty());
+
     if (modeAst) {
         doc->dump(out);
         Node::deleteTree(doc);
-        return parser.errors.isEmpty() ? 0 : 1;
+        return hasErrors ? 1 : 0;
     }
 
-    // modeTypst
-    TypstGenerator gen(genOpt);
-    TypstGenError ge;
-    QString typ;
-    QTextStream typOut(&typ);
 
-    if (!gen.generate(doc, typOut, &ge)) {
-        err << "Typst generation error at line " << ge.line << ": " << ge.message << "\n";
+    if (modeTypst && !hasErrors) {
+        TypstGenerator gen(genOpt);
+        TypstGenError ge;
+        QString typ;
+        QTextStream typOut(&typ);
+
+        if (!gen.generate(doc, typOut, &ge)) {
+            err << "Typst generation error at line " << ge.line << ": " << ge.message << "\n";
+            Node::deleteTree(doc);
+            return 1;
+        }
+
         Node::deleteTree(doc);
-        return 1;
+
+        if (!writeFileUtf8(outPath, typ, &ioErr)) {
+            err << ioErr << "\n";
+            return 2;
+        }
+
+        out << "Wrote " << outPath << "\n";
+        return 0;
     }
 
     Node::deleteTree(doc);
 
-    if (!writeFileUtf8(outPath, typ, &ioErr)) {
-        err << ioErr << "\n";
-        return 2;
-    }
+    if( !hasErrors )
+        out << "File successfully checked\n";
 
-    out << "Wrote " << outPath << "\n";
-    return 0;
+    return hasErrors ? 1 : 0;
 }

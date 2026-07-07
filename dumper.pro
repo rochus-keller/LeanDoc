@@ -12,11 +12,13 @@ HEADERS += \
     LeanDocAst2.h \
     LeanDocLexer2.h \
     LeanDocParser2.h \
+    LeanDocPreprocessor.h \
     LeanDocValidator.h
 
 SOURCES += \
     LeanDocAst2.cpp \
     LeanDocLexer2.cpp \
     LeanDocParser2.cpp \
+    LeanDocPreprocessor.cpp \
     LeanDocValidator.cpp \
     dumper.cpp

@@ -20,11 +20,13 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QStringList>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QTextStream>
 #include <QtDebug>
 
 #include "LeanDocLexer2.h"
 #include "LeanDocParser2.h"
+#include "LeanDocPreprocessor.h"
 #include "LeanDocAst2.h"
 #include "LeanDocValidator.h"
 
@@ -109,6 +111,13 @@ int main(int argc, char** argv)
 
     for (int i = 0; i < p.errors.size(); ++i)
         err << "Error at line " << p.errors[i].pos.row << ": " << p.errors[i].message << "\n";
+
+    // preprocessing pass
+    Preprocessor preproc;
+    preproc.setBaseDir(QFileInfo(filePath).absolutePath());
+    preproc.process(doc);
+    for (int i = 0; i < preproc.errors.size(); ++i)
+        err << "Preprocessor error at line " << preproc.errors[i].line << ": " << preproc.errors[i].message << "\n";
 
     // validation pass
     Validator v;

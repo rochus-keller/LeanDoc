@@ -375,8 +375,11 @@ bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* e
 
 bool TypstGenerator::emitBlockMacro(const Node* n, QTextStream& out, TypstGenError* err)
 {
-    if( n->name == "include")
-        return failAt(err, n, "include:: requires semantic include expansion before Typst generation");
+    if( n->name == "include") {
+        // include should have been resolved by preprocessor; skip if unresolved
+        out << "// [unresolved include: " << escText(n->target) << "]\n";
+        return true;
+    }
 
     if( n->name == "image") {
         QString t = n->target.trimmed();
@@ -397,8 +400,12 @@ bool TypstGenerator::emitBlockMacro(const Node* n, QTextStream& out, TypstGenErr
 
 bool TypstGenerator::emitDirective(const Node* n, QTextStream& out, TypstGenError* err)
 {
-    Q_UNUSED(out);
-    return failAt(err, n, "Directives must be resolved before Typst generation (" + n->name + ")");
+    // after preprocessing, remaining directives (e.g. unresolved ifdef) just emit body
+    for( int i = 0; i < n->children.size(); ++i) {
+        if( !emitNode(n->children[i], out, err, 0))
+            return false;
+    }
+    return true;
 }
 
 bool TypstGenerator::emitInlineSeq(const QList<Node*>& inl, QTextStream& out, TypstGenError* err)
