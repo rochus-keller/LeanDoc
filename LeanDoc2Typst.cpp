@@ -112,7 +112,7 @@ int main(int argc, char** argv)
     if (modeFlatten) {
         // expand all include:: directives into a single union .adoc file
         Preprocessor preproc;
-        const QString merged = preproc.flatten(inPath);
+        const QString merged = preproc.flatten(inPath, outPath);
         for (int i = 0; i < preproc.errors.size(); ++i)
             err << "Error: " << preproc.errors[i].message << "\n";
         if (!preproc.errors.isEmpty())

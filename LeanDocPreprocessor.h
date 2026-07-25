@@ -44,7 +44,7 @@ public:
 
     bool process(Node* doc);
 
-    QString flatten(const QString& filePath);
+    QString flatten(const QString& filePath, const QString& outPath = QString());
 
     QList<PreprocessorError> errors;
 
@@ -59,6 +59,7 @@ private:
     void substituteInlineList(QList<Node*>& inl);
 
     QStringList expandFile(const QString& absPath, const QString& attrsStr, int depth);
+    QString rewriteImagePaths(const QString& line, const QString& fromDir);
 
     QString readFile(const QString& path);
     QStringList filterByTag(const QStringList& lines, const QString& tag);
@@ -67,6 +68,7 @@ private:
     void error(int line, const QString& msg);
 
     QString dbaseDir;
+    QString doutDir; // target directory for --flatten path rewriting
     QMap<QString,QString> dattrs;
     QSet<QString> dincludeStack; // circular include detection
     int dmaxIncludeDepth;

@@ -583,9 +583,31 @@ Node* Parser::parseSection(BlockMeta* m)
     return n;
 }
 
+static QString unsupportedBlockMacroName(const QString& line)
+{
+    // a double-colon macro invocation (NAME::target[...]) at block level
+    const QString s = line.trimmed();
+    const int dc = s.indexOf("::");
+    if( dc <= 0 || !s.endsWith("]"))
+        return QString();
+    const QString name = s.left(dc);
+    if( !isValidIdentifier(name) || name == "include")
+        return QString();
+    return name;
+}
+
 Node* Parser::parseParagraphOrLiteral(BlockMeta* m)
 {
     bool literal = (!la(0).raw.isEmpty() && la(0).raw[0].isSpace());
+
+    if( !literal) {
+        const QString name = unsupportedBlockMacroName(la(0).raw);
+        if( name == "image")
+            error("block image macro 'image::' is not supported; use single-colon "
+                  "'image:' as the sole content of a paragraph", la(0).lineNo);
+        else if( !name.isEmpty())
+            error("unsupported block macro '" + name + "::'", la(0).lineNo);
+    }
 
     Node* p = new Node(literal ? Node::K_LiteralParagraph : Node::K_Paragraph);
     p->pos = RowCol(la(0).lineNo, 1);
@@ -629,7 +651,25 @@ Node* Parser::parseAdmonitionParagraph(BlockMeta* m)
     a->pos = RowCol(t.lineNo, 1);
     a->meta = m;
     a->name = s.left(colon);
-    a->children = parseInlineContent(s.mid(colon+1).trimmed(), t.lineNo);
+
+    // a paragraph admonition runs until a blank line (or any block terminator);
+    // gather the first line's text plus contiguous continuation lines.
+    QStringList lines;
+    lines << s.mid(colon+1).trimmed();
+    while( la(0).kind == LineTok::T_TEXT) {
+        const QString cont = la(0).raw.trimmed();
+        if( cont.isEmpty())
+            break;
+        if( cont.endsWith(" +"))
+            lines << cont.left(cont.size()-2) + "\n";
+        else
+            lines << cont;
+        take();
+        if( terminatesParagraph(la(0).kind))
+            break;
+    }
+
+    a->children = parseInlineContent(lines.join(" "), t.lineNo);
     return a;
 }
 

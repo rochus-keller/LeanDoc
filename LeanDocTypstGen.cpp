@@ -126,6 +126,7 @@ bool TypstGenerator::emitPreamble(const Node* doc, QTextStream& out, TypstGenErr
             out << "#set heading(numbering: \"1.\")\n";
         out << "#set text(font: \"FreeSans\", size: 11pt)\n\n";
         out << "#let admon(kind, body) = block(\n"
+               "  width: 100%,\n"
                "  inset: (x: 10pt, y: 8pt),\n"
                "  radius: 4pt,\n"
                "  fill: luma(240),\n"
@@ -142,6 +143,7 @@ bool TypstGenerator::emitPreamble(const Node* doc, QTextStream& out, TypstGenErr
             out << "#set heading(numbering: \"1.\")\n";
         out << "#set text(font: \"FreeSerif\", size: 11pt, leading: 1.25em)\n\n";
         out << "#let admon(kind, body) = block(\n"
+               "  width: 100%,\n"
                "  inset: (x: 12pt, y: 10pt),\n"
                "  radius: 6pt,\n"
                "  fill: rgb(\"f6f7fb\"),\n"
@@ -214,8 +216,37 @@ bool TypstGenerator::emitSection(const Node* n, QTextStream& out, TypstGenError*
     return true;
 }
 
+static const Node* soleImage(const Node* n)
+{
+    // a block-level image is a paragraph whose sole content is one image: macro
+    const Node* img = 0;
+    for( int i = 0; i < n->children.size(); ++i) {
+        const Node* c = n->children[i];
+        if( !c || c->kind == Node::K_Space)
+            continue;
+        if( c->kind == Node::K_InlineMacro && c->name == "image" && !img)
+            img = c;
+        else
+            return 0; // other content present -> inline image, not a block figure
+    }
+    return img;
+}
+
 bool TypstGenerator::emitParagraph(const Node* n, QTextStream& out, TypstGenError* err)
 {
+    const Node* img = soleImage(n);
+    if( img) {
+        // standalone image: render as a centered figure, block title as caption
+        const bool hasCaption = n->meta && !n->meta->title.isEmpty();
+        out << "#figure(\n  [";
+        emitImageCall(img->target.trimmed(), img->text, out);
+        out << "],\n";
+        if( hasCaption)
+            out << "  caption: [" << escText(n->meta->title) << "],\n";
+        out << ")" << labelSuffix(n->meta) << "\n";
+        return true;
+    }
+
     if( !emitInlineSeq(n->children, out, err))
         return false;
     out << labelSuffix(n->meta) << "\n";
@@ -373,26 +404,54 @@ static ColsInfo parseColsSpec(const BlockMeta* m, int fallbackCols)
     return ci;
 }
 
+static QString imageDim(const QString& v)
+{
+    // convert an image dimension to a Typst length
+    QString s = v.trimmed();
+    if( s.isEmpty())
+        return QString();
+    if( s.endsWith('%'))
+        return s;
+    bool ok = false;
+    const int n = s.toInt(&ok);
+    if( ok && n > 0)
+        return QString::number(n) + "pt";
+    return QString();
+}
+
 void TypstGenerator::emitImageCall(const QString& path, const QString& attrs, QTextStream& out)
 {
-    // image attribute string is positional: alt[,width[,height]]. width/height are pixel counts; emit them as Typst lengths.
+    // image attributes are positional (alt[,width[,height]]) but width/height
+    // may also be given as named attributes (width=..., height=...).
     QString alt;
     QString width;
     QString height;
     const QStringList parts = attrs.split(',');
-    if( parts.size() >= 1) alt = parts[0].trimmed();
-    if( parts.size() >= 2) width = parts[1].trimmed();
-    if( parts.size() >= 3) height = parts[2].trimmed();
+    int positional = 0;
+    for( int i = 0; i < parts.size(); ++i) {
+        const QString p = parts[i].trimmed();
+        const int eq = p.indexOf('=');
+        if( eq > 0) {
+            const QString key = p.left(eq).trimmed();
+            const QString val = p.mid(eq+1).trimmed();
+            if( key == "width") width = val;
+            else if( key == "height") height = val;
+            else if( key == "alt") alt = val;
+        } else {
+            if( positional == 0) alt = p;
+            else if( positional == 1) width = p;
+            else if( positional == 2) height = p;
+            ++positional;
+        }
+    }
 
     out << "#image(\"" << escString(path) << "\"";
-    bool ok = false;
-    const int w = width.toInt(&ok);
-    if( ok && w > 0)
-        out << ", width: " << w << "pt";
-    ok = false;
-    const int h = height.toInt(&ok);
-    if( ok && h > 0)
-        out << ", height: " << h << "pt";
+    const QString w = imageDim(width);
+    if( !w.isEmpty())
+        out << ", width: " << w;
+    const QString h = imageDim(height);
+    if( !h.isEmpty())
+        out << ", height: " << h;
     if( !alt.isEmpty())
         out << ", alt: \"" << escString(alt) << "\"";
     out << ")";

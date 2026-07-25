@@ -21,7 +21,8 @@
 #include "LeanDocParser2.h"
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
-#include <QtCore/QDir> 
+#include <QtCore/QDir>
+#include <QtCore/QRegularExpression>
 using namespace LeanDoc;
 
 void Preprocessor::error(int line, const QString& msg)
@@ -279,12 +280,38 @@ static QString extractAttr(const QString& attrsStr, const QString& key)
     return attrsStr.mid(start).trimmed();
 }
 
-QString Preprocessor::flatten(const QString& filePath)
+QString Preprocessor::rewriteImagePaths(const QString& line, const QString& fromDir)
+{
+    // rewrite relative image: / image:: paths so they resolve from doutDir
+    if( doutDir.isEmpty())
+        return line;
+
+    static const QRegularExpression re("image:{1,2}([^\\[\\]\\s]+)\\[");
+    QString result;
+    int last = 0;
+    QRegularExpressionMatchIterator it = re.globalMatch(line);
+    while( it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        result += line.mid(last, m.capturedStart(1) - last); // keep "image:"/"image::"
+        QString path = m.captured(1);
+        if( QFileInfo(path).isRelative()) {
+            const QString abs = QFileInfo(fromDir + "/" + path).absoluteFilePath();
+            path = QDir(doutDir).relativeFilePath(abs);
+        }
+        result += path;
+        last = m.capturedEnd(1);
+    }
+    result += line.mid(last);
+    return result;
+}
+
+QString Preprocessor::flatten(const QString& filePath, const QString& outPath)
 {
     // expand all include:: directives at the source-text level, returning a single self-contained document
     // tag=/lines= filters are applied; other content is preserved verbatim
     errors.clear();
     dincludeStack.clear();
+    doutDir = outPath.isEmpty() ? QString() : QFileInfo(outPath).absolutePath();
     const QString abs = QFileInfo(filePath).absoluteFilePath();
     const QStringList lines = expandFile(abs, QString(), 0);
     return lines.join('\n');
@@ -346,7 +373,7 @@ QStringList Preprocessor::expandFile(const QString& absPath, const QString& attr
                 continue;
             }
         }
-        out.append(lines[i]);
+        out.append(rewriteImagePaths(lines[i], baseDir));
     }
 
     dincludeStack.remove(canonical);
