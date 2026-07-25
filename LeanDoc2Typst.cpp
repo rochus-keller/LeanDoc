@@ -68,12 +68,13 @@ int main(int argc, char** argv)
     if (args.size() < 2) {
         err << "Usage:\n"
             << "  leandoc --typst <in.adoc> -o <out.typ> [--template plain|report] [--template-file tpl.typ]\n"
+            << "  leandoc --flatten <in.adoc> -o <out.adoc>\n"
             << "  leandoc --ast <in.adoc>\n"
             << "  leandoc <in.adoc>\n";
         return 2;
     }
 
-    bool modeAst = false, modeTypst = false;
+    bool modeAst = false, modeTypst = false, modeFlatten = false;
     QString inPath, outPath = "output.typ";
     TypstGenerator::Options genOpt;
 
@@ -85,6 +86,10 @@ int main(int argc, char** argv)
         } else if (a == "--typst") {
             modeAst = false;
             modeTypst = true;
+        } else if (a == "--flatten") {
+            modeFlatten = true;
+            modeAst = false;
+            modeTypst = false;
         } else if (a == "-o" && i+1 < args.size())
             outPath = args[++i];
         else if (a == "--template" && i+1 < args.size())
@@ -102,7 +107,25 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    QString text, ioErr;
+    QString ioErr;
+
+    if (modeFlatten) {
+        // expand all include:: directives into a single union .adoc file
+        Preprocessor preproc;
+        const QString merged = preproc.flatten(inPath);
+        for (int i = 0; i < preproc.errors.size(); ++i)
+            err << "Error: " << preproc.errors[i].message << "\n";
+        if (!preproc.errors.isEmpty())
+            return 1;
+        if (!writeFileUtf8(outPath, merged, &ioErr)) {
+            err << ioErr << "\n";
+            return 2;
+        }
+        out << "Wrote " << outPath << "\n";
+        return 0;
+    }
+
+    QString text;
     if (!readFileUtf8(inPath, &text, &ioErr)) {
         err << ioErr << "\n";
         return 2;

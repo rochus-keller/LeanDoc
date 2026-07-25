@@ -48,11 +48,9 @@ public:
     bool generate(const Node* doc, QTextStream& out, TypstGenError* err);
 
 private:
-    // top-level
     bool emitPreamble(const Node* doc, QTextStream& out, TypstGenError* err);
     bool emitNode(const Node* n, QTextStream& out, TypstGenError* err, int headingShift);
 
-    // blocks
     bool emitSection(const Node* n, QTextStream& out, TypstGenError* err, int headingShift);
     bool emitParagraph(const Node* n, QTextStream& out, TypstGenError* err);
     bool emitLiteral(const Node* n, QTextStream& out, TypstGenError* err);
@@ -63,13 +61,12 @@ private:
     bool emitBlockMacro(const Node* n, QTextStream& out, TypstGenError* err);
     bool emitDirective(const Node* n, QTextStream& out, TypstGenError* err);
 
-    // inline
     bool emitInlineSeq(const QList<Node*>& inl, QTextStream& out, TypstGenError* err);
     bool emitInline(const Node* n, QTextStream& out, TypstGenError* err);
 
-    // helpers
     static QString escText(const QString& s);      // escape plain text in typst markup context
     static QString escString(const QString& s);    // escape for "..." string literals
+    static void emitImageCall(const QString& path, const QString& attrs, QTextStream& out);
     static QString labelSuffix(const BlockMeta* m);
     static QString headingMarks(int level);
 

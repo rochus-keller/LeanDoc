@@ -299,36 +299,103 @@ bool TypstGenerator::emitList(const Node* n, QTextStream& out, TypstGenError* er
     return true;
 }
 
-static QString typstColSpec(const BlockMeta* m, int fallbackCols)
-{
-    if( !m || !m->attrs.contains("cols"))
-        return QString::number(fallbackCols);
+/* A cols spec is either
+   - relative widths ("1,2,3"),
+   - alignment chars ("<,^,>"),
+   - or a per-column combination ("<2,^1,>3").
+*/
+struct ColsInfo {
+    QString columns; // Typst columns: argument and align
+    QString align;
+};
 
-    // parse cols="1,2,3" into (1fr, 2fr, 3fr)
+static QString alignName(const QString& a)
+{
+    if( a == "<")
+        return "left";
+    if( a == "^")
+        return "center";
+    if( a == ">")
+        return "right";
+    return "auto";
+}
+
+static ColsInfo parseColsSpec(const BlockMeta* m, int fallbackCols)
+{
+    ColsInfo ci;
+    ci.columns = QString::number(fallbackCols);
+    if( !m || !m->attrs.contains("cols"))
+        return ci;
+
     QString v = m->attrs.value("cols");
     if( v.startsWith('"') && v.endsWith('"'))
         v = v.mid(1, v.size()-2);
     const QStringList parts = v.split(',');
+    if( parts.isEmpty())
+        return ci;
 
-    // check if all parts are numeric (relative widths)
-    bool allNumeric = true;
+    QStringList widths;
+    QStringList aligns;
+    bool anyWidth = false;
+    bool anyAlign = false;
     for( int i = 0; i < parts.size(); ++i) {
-        bool ok = false;
-        parts[i].trimmed().toInt(&ok);
-        if( !ok) { allNumeric = false; break; }
-    }
-
-    if( allNumeric && !parts.isEmpty()) {
-        QString r = "(";
-        for( int i = 0; i < parts.size(); ++i) {
-            if( i > 0) r += ", ";
-            r += parts[i].trimmed() + "fr";
+        QString p = parts[i].trimmed();
+        QString al;
+        // leading alignment char(s): <, ^, >
+        while( !p.isEmpty() && (p[0] == '<' || p[0] == '^' || p[0] == '>')) {
+            al = p.left(1);
+            p = p.mid(1).trimmed();
         }
-        r += ")";
-        return r;
+        bool ok = false;
+        const int w = p.toInt(&ok);
+        if( ok) {
+            widths << (QString::number(w) + "fr");
+            anyWidth = true;
+        } else {
+            widths << "1fr";
+        }
+        if( !al.isEmpty()) {
+            anyAlign = true;
+            aligns << alignName(al);
+        } else {
+            aligns << "auto";
+        }
     }
 
-    return QString::number(fallbackCols);
+    if( anyWidth)
+        ci.columns = "(" + widths.join(", ") + ")";
+    else
+        ci.columns = QString::number(parts.size());
+
+    if( anyAlign)
+        ci.align = "(" + aligns.join(", ") + ")";
+
+    return ci;
+}
+
+void TypstGenerator::emitImageCall(const QString& path, const QString& attrs, QTextStream& out)
+{
+    // image attribute string is positional: alt[,width[,height]]. width/height are pixel counts; emit them as Typst lengths.
+    QString alt;
+    QString width;
+    QString height;
+    const QStringList parts = attrs.split(',');
+    if( parts.size() >= 1) alt = parts[0].trimmed();
+    if( parts.size() >= 2) width = parts[1].trimmed();
+    if( parts.size() >= 3) height = parts[2].trimmed();
+
+    out << "#image(\"" << escString(path) << "\"";
+    bool ok = false;
+    const int w = width.toInt(&ok);
+    if( ok && w > 0)
+        out << ", width: " << w << "pt";
+    ok = false;
+    const int h = height.toInt(&ok);
+    if( ok && h > 0)
+        out << ", height: " << h << "pt";
+    if( !alt.isEmpty())
+        out << ", alt: \"" << escString(alt) << "\"";
+    out << ")";
 }
 
 bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* err)
@@ -348,7 +415,11 @@ bool TypstGenerator::emitTable(const Node* n, QTextStream& out, TypstGenError* e
         (n->meta && n->meta->attrs.contains("options") &&
          n->meta->attrs.value("options").contains("header"));
 
-    out << "#table(columns: " << typstColSpec(n->meta, cols) << ",\n";
+    const ColsInfo ci = parseColsSpec(n->meta, cols);
+    out << "#table(columns: " << ci.columns;
+    if( !ci.align.isEmpty())
+        out << ", align: " << ci.align;
+    out << ",\n";
     if( hasHeader)
         out << "  table.header(\n";
 
@@ -385,7 +456,9 @@ bool TypstGenerator::emitBlockMacro(const Node* n, QTextStream& out, TypstGenErr
         QString t = n->target.trimmed();
         int lb = t.indexOf('[');
         QString path = (lb < 0) ? t : t.left(lb).trimmed();
-        out << "#image(\"" << escString(path) << "\")" << labelSuffix(n->meta) << "\n";
+        QString attrs = (lb < 0) ? QString() : t.mid(lb+1, t.indexOf(']', lb) - lb - 1);
+        emitImageCall(path, attrs, out);
+        out << labelSuffix(n->meta) << "\n";
         return true;
     }
 
@@ -419,7 +492,8 @@ bool TypstGenerator::emitInlineSeq(const QList<Node*>& inl, QTextStream& out, Ty
 
 bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* err)
 {
-    if( !n) return true;
+    if( !n)
+        return true;
 
     switch( n->kind ) {
     case Node::K_Text:
@@ -501,6 +575,10 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
         return true;
 
     case Node::K_InlineMacro:
+        if( n->name == "image") {
+            emitImageCall(n->target.trimmed(), n->text, out);
+            return true;
+        }
         if( n->name == "footnote") {
             out << "#footnote[";
             if( !emitInlineSeq(n->children, out, err))

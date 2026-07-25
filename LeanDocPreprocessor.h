@@ -44,6 +44,8 @@ public:
 
     bool process(Node* doc);
 
+    QString flatten(const QString& filePath);
+
     QList<PreprocessorError> errors;
 
 private:
@@ -55,6 +57,8 @@ private:
     bool evaluateConditional(Node* parent, int childIdx);
     void substituteAttrRefs(Node* n);
     void substituteInlineList(QList<Node*>& inl);
+
+    QStringList expandFile(const QString& absPath, const QString& attrsStr, int depth);
 
     QString readFile(const QString& path);
     QStringList filterByTag(const QStringList& lines, const QString& tag);

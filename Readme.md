@@ -72,7 +72,7 @@ no `kbd:`, `btn:`, `menu:` macros,
 - [x] Derive a new, lean subset from AsciiDoc with a similar syntax, but parseable and with no ambiguity
 - [x] Lexer, parser, AST 
 - [x] Semantic validator
-- [ ] Processing includes and conditional compilation
+- [x] Processing includes and conditional compilation
 - [x] Typst generator (WIP)
 - [ ] Integration with Typos engine
 
@@ -92,6 +92,12 @@ I need a processor for ifdef to process technical_article1.
 Now that I have implemented the two Micron specs there was a need to fix/improve both the LeanDoc spec and parser. Many things in the
 spec were unclear and the parser had wholes. I now also added a validator and totally refactored the existing code. This was also
 a good opportunity to migrate the spec to LeanDoc itself. Also the Typst generator got many improvements. 
+
+### Status on July 25, 2026
+
+Extended validator checks. Implemented includes and conditional compilation. Developed and tested in-project with EXPRESS book.
+New --flatten option. Made attribute declarations and references work. Implemented table formats, attributes, images and
+includes in Typst generator.
 
 ### Additional Credits
 

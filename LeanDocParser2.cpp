@@ -326,47 +326,68 @@ Node* Parser::parseDocument()
     return doc;
 }
 
+static bool looksLikeAuthorLine(const QString& s)
+{
+    // AuthorLine = LINE_START IDENTIFIER ( WHITESPACE+ IDENTIFIER )* [ WHITESPACE+ "<" EMAIL ">" ] LINE_END ;
+    // strip optional <email> tail
+    QString names = s;
+    const int lt = names.indexOf('<');
+    if( lt >= 0)
+        names = names.left(lt).trimmed();
+    if( names.isEmpty())
+        return false;
+    // must be one or more whitespace-separated identifiers
+    const QStringList words = names.split(' ', Qt::SkipEmptyParts);
+    if( words.isEmpty())
+        return false;
+    for( int i = 0; i < words.size(); ++i) {
+        if( !isValidIdentifier(words[i]))
+            return false;
+    }
+    return true;
+}
+
 void Parser::parseDocumentHeader(Node* doc)
 {
     // document title: = Title (level 1)
+    bool hadTitle = false;
     if( la(0).kind == LineTok::T_SECTION && sectionLevel(la(0).raw) == 1) {
         LineTok t = take();
         doc->kv.insert("title", sectionTitle(t.raw));
-        skipBlankLines();
+        hadTitle = true;
     }
 
-    // author line: Name <email>
-    if( la(0).kind == LineTok::T_TEXT) {
-        const QString s = la(0).raw.trimmed();
-        if( s.contains('<') && s.contains('>')) {
-            doc->kv.insert("authorLine", s);
-            take();
-            skipBlankLines();
+    // author and revision lines only exist when a title precedes them
+    if( hadTitle) {
+        // author line: Name [<email>]  (email optional per spec)
+        if( la(0).kind == LineTok::T_TEXT) {
+            const QString s = la(0).raw.trimmed();
+            if( !s.startsWith(':') && looksLikeAuthorLine(s)) {
+                doc->kv.insert("authorLine", s);
+                take();
+            }
         }
-    }
 
-    // revision line: vN.N, optional date/remark
-    if( la(0).kind == LineTok::T_TEXT) {
-        const QString s = la(0).raw.trimmed();
-        if( s.size() >= 2 && s[0] == 'v' && s[1].isDigit()) {
-            // validate: must be vDIGITS.DIGITS, optionally followed by ', date' or ', remark'
-            int i = 1;
-            while( i < s.size() && (s[i].isDigit() || s[i] == '.')) 
-                ++i;
-            if( i > 1 && (i >= s.size() || s[i] == ',' || s[i] == ' ')) {
-                doc->kv.insert("revisionLine", s);
-                take();
-                skipBlankLines();
-            } else {
-                error("invalid revision line '" + s +
-                      "'; expected format 'vN.N[, date][, remark]'", la(0).lineNo);
-                take();
-                skipBlankLines();
+        // revision line: vN.N, optional date/remark
+        if( la(0).kind == LineTok::T_TEXT) {
+            const QString s = la(0).raw.trimmed();
+            if( s.size() >= 2 && s[0] == 'v' && s[1].isDigit()) {
+                int i = 1;
+                while( i < s.size() && (s[i].isDigit() || s[i] == '.'))
+                    ++i;
+                if( i > 1 && (i >= s.size() || s[i] == ',' || s[i] == ' ')) {
+                    doc->kv.insert("revisionLine", s);
+                    take();
+                } else {
+                    error("invalid revision line '" + s +
+                          "'; expected format 'vN.N[, date][, remark]'", la(0).lineNo);
+                    take();
+                }
             }
         }
     }
 
-    // document attributes: :name: value
+    // document attributes: :name: value  (also :!name: / :name!: to unset)
     while( la(0).kind == LineTok::T_TEXT) {
         const QString s = la(0).raw.trimmed();
         if( !s.startsWith(':'))
@@ -374,12 +395,24 @@ void Parser::parseDocumentHeader(Node* doc)
         int second = s.indexOf(':', 1);
         if( second <= 1)
             break;
-        const QString attrName = s.mid(1, second-1).trimmed();
+        QString attrName = s.mid(1, second-1).trimmed();
+        const QString attrVal = s.mid(second+1).trimmed();
+        // unset syntax: :!name: or :name!:
+        bool unset = false;
+        if( attrName.startsWith('!')) {
+            unset = true;
+            attrName = attrName.mid(1).trimmed();
+        } else if( attrName.endsWith('!')) {
+            unset = true;
+            attrName = attrName.left(attrName.size()-1).trimmed();
+        }
         if( !isValidIdentifier(attrName))
             error("invalid document attribute name ':" + attrName +
                   ":'; must match IDENTIFIER", la(0).lineNo);
-        const QString attrVal  = s.mid(second+1).trimmed();
-        doc->kv.insert("attr:" + attrName, attrVal);
+        if( unset)
+            doc->kv.remove("attr:" + attrName);
+        else
+            doc->kv.insert("attr:" + attrName, attrVal);
         take();
     }
 }
@@ -1109,7 +1142,10 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                             mn->name = macroName;
                             mn->target = s.mid(colon+1, lb-(colon+1));
                             const QString inner = s.mid(lb+1, rb-(lb+1));
-                            if( !inner.isEmpty())
+                            // image attributes (alt,width,height) are positional data, not inline content: keep them raw
+                            if( macroName == "image")
+                                mn->text = inner;
+                            else if( !inner.isEmpty())
                                 mn->children = parseInlineContentRec(inner, lineNo, depth+1);
                             out.append(mn);
                             i = rb + 1;

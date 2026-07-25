@@ -21,7 +21,7 @@
 #include "LeanDocParser2.h"
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
-#include <QtCore/QDir>
+#include <QtCore/QDir> 
 using namespace LeanDoc;
 
 void Preprocessor::error(int line, const QString& msg)
@@ -264,6 +264,93 @@ bool Preprocessor::evaluateConditional(Node* parent, int childIdx)
     }
 
     return true;
+}
+
+static QString extractAttr(const QString& attrsStr, const QString& key)
+{
+    // extract a value like "tag=name" or "lines=1..3" from an include attribute list
+    const int ki = attrsStr.indexOf(key);
+    if( ki < 0)
+        return QString();
+    const int start = ki + key.size();
+    const int comma = attrsStr.indexOf(',', start);
+    if( comma > start)
+        return attrsStr.mid(start, comma-start).trimmed();
+    return attrsStr.mid(start).trimmed();
+}
+
+QString Preprocessor::flatten(const QString& filePath)
+{
+    // expand all include:: directives at the source-text level, returning a single self-contained document
+    // tag=/lines= filters are applied; other content is preserved verbatim
+    errors.clear();
+    dincludeStack.clear();
+    const QString abs = QFileInfo(filePath).absoluteFilePath();
+    const QStringList lines = expandFile(abs, QString(), 0);
+    return lines.join('\n');
+}
+
+QStringList Preprocessor::expandFile(const QString& absPath, const QString& attrsStr, int depth)
+{
+    QStringList out;
+    if( depth >= dmaxIncludeDepth) {
+        error(0, "include:: depth limit exceeded (max " +
+              QString::number(dmaxIncludeDepth) + ")");
+        return out;
+    }
+
+    QString canonical = QFileInfo(absPath).canonicalFilePath();
+    if( canonical.isEmpty())
+        canonical = absPath;
+    if( dincludeStack.contains(canonical)) {
+        error(0, "circular include detected: " + absPath);
+        return out;
+    }
+
+    const QString content = readFile(absPath);
+    if( content.isNull()) {
+        error(0, "include file not found: " + absPath);
+        return out;
+    }
+
+    // apply tag=/lines= filters to the raw file content
+    QStringList lines = content.split('\n');
+    const QString tag = extractAttr(attrsStr, "tag=");
+    if( !tag.isEmpty())
+        lines = filterByTag(lines, tag);
+    const QString lineSpec = extractAttr(attrsStr, "lines=");
+    if( !lineSpec.isEmpty())
+        lines = filterByLines(lines, lineSpec);
+
+    dincludeStack.insert(canonical);
+    const QString baseDir = QFileInfo(absPath).path();
+
+    for( int i = 0; i < lines.size(); ++i) {
+        const QString trimmed = lines[i].trimmed();
+        if( trimmed.startsWith("include::") && trimmed.endsWith("]")) {
+            const QString body = trimmed.mid(9); // strip "include::"
+            const int lb = body.indexOf('[');
+            if( lb >= 0) {
+                const QString incPath = body.left(lb).trimmed();
+                const int rb = body.lastIndexOf(']');
+                const QString incAttrs = (rb > lb) ? body.mid(lb+1, rb-(lb+1)) : QString();
+
+                QString incAbs;
+                if( QFileInfo(incPath).isRelative())
+                    incAbs = baseDir + "/" + incPath;
+                else
+                    incAbs = incPath;
+                incAbs = QFileInfo(incAbs).absoluteFilePath();
+
+                out += expandFile(incAbs, incAttrs, depth + 1);
+                continue;
+            }
+        }
+        out.append(lines[i]);
+    }
+
+    dincludeStack.remove(canonical);
+    return out;
 }
 
 QString Preprocessor::readFile(const QString& path)
