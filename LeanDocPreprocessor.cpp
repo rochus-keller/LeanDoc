@@ -79,6 +79,10 @@ void Preprocessor::processNode(Node* n, int depth)
 {
     substituteAttrRefs(n);
 
+    if( n->kind == Node::K_DelimitedBlock && n->delimKind == Node::DK_Listing &&
+            !n->text.isEmpty())
+        expandVerbatimIncludes(n, depth);
+
     if( !n->children.isEmpty())
         processChildren(n, depth);
 }
@@ -107,6 +111,81 @@ void Preprocessor::substituteInlineList(QList<Node*>& inl)
             // if not defined, leave as-is (validator can warn)
         } else if( !child->children.isEmpty())
             substituteInlineList(child->children);
+    }
+}
+
+static QMap<QString,QString> parseIncludeAttrs(const QString& attrsStr)
+{
+    QMap<QString,QString> res;
+    const QStringList parts = attrsStr.split(',', Qt::SkipEmptyParts);
+    for( int i = 0; i < parts.size(); ++i) {
+        const QString p = parts[i].trimmed();
+        if( p.isEmpty())
+            continue;
+        const int eq = p.indexOf('=');
+        if( eq > 0)
+            res.insert(p.left(eq).trimmed(), p.mid(eq+1).trimmed());
+        else
+            res.insert(p, QString());
+    }
+    return res;
+}
+
+void Preprocessor::checkIncludeAttrs(const QMap<QString,QString>& attrs, int line)
+{
+    // closed vocabulary of include:: attributes per spec
+    QMap<QString,QString>::ConstIterator it = attrs.constBegin();
+    for( ; it != attrs.constEnd(); ++it) {
+        const QString& key = it.key();
+        if( key != "tag" && key != "tags" && key != "lines" && key != "leveloffset")
+            error(line, "unknown include:: attribute '" + key +
+                  "'; valid attributes are tag, tags, lines, leveloffset");
+    }
+    if( attrs.contains("leveloffset")) {
+        bool ok = false;
+        parseLevelOffset(attrs.value("leveloffset"), &ok);
+        if( !ok)
+            error(line, "invalid leveloffset value '" + attrs.value("leveloffset") +
+                  "'; expected +N, -N or N");
+    }
+}
+
+int Preprocessor::parseLevelOffset(const QString& raw, bool* ok)
+{
+    QString s = raw.trimmed();
+    if( ok) *ok = false;
+    if( s.isEmpty())
+        return 0;
+    int sign = 1;
+    if( s.startsWith('+'))
+        s = s.mid(1);
+    else if( s.startsWith('-')) {
+        sign = -1;
+        s = s.mid(1);
+    }
+    bool numOk = false;
+    const int n = s.toInt(&numOk);
+    if( !numOk)
+        return 0;
+    if( ok) *ok = true;
+    return sign * n;
+}
+
+static void applyLevelOffset(QList<Node*>& nodes, int off)
+{
+    if( off == 0)
+        return;
+    for( int i = 0; i < nodes.size(); ++i) {
+        Node* n = nodes[i];
+        if( !n)
+            continue;
+        if( n->kind == Node::K_Section) {
+            int lv = n->level + off;
+            if( lv < 1) lv = 1;
+            if( lv > 6) lv = 6;
+            n->level = lv;
+        }
+        applyLevelOffset(n->children, off);
     }
 }
 
@@ -155,24 +234,16 @@ bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
         return true;
     }
 
-    // apply tag filter
-    QStringList lines = content.split('\n');
-    if( attrsStr.contains("tag=")) {
-        int ti = attrsStr.indexOf("tag=");
-        int te = attrsStr.indexOf(',', ti);
-        QString tag = (te > ti) ? attrsStr.mid(ti+4, te-(ti+4)).trimmed()
-                                : attrsStr.mid(ti+4).trimmed();
-        lines = filterByTag(lines, tag);
-    }
+    const QMap<QString,QString> incAttrs = parseIncludeAttrs(attrsStr);
+    checkIncludeAttrs(incAttrs, inc->pos.row);
 
-    // apply lines filter
-    if( attrsStr.contains("lines=")) {
-        int li = attrsStr.indexOf("lines=");
-        int le = attrsStr.indexOf(',', li);
-        QString spec = (le > li) ? attrsStr.mid(li+6, le-(li+6)).trimmed()
-                                 : attrsStr.mid(li+6).trimmed();
-        lines = filterByLines(lines, spec);
-    }
+    QStringList lines = content.split('\n');
+    if( incAttrs.contains("tag"))
+        lines = filterByTag(lines, incAttrs.value("tag"));
+    if( incAttrs.contains("tags"))
+        lines = filterByTags(lines, incAttrs.value("tags"));
+    if( incAttrs.contains("lines"))
+        lines = filterByLines(lines, incAttrs.value("lines"));
 
     content = lines.join('\n');
 
@@ -200,6 +271,13 @@ bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
 
     QList<Node*> included = subdoc->children;
     subdoc->children.clear(); // detach before deleting subdoc shell
+
+    if( incAttrs.contains("leveloffset")) {
+        bool ok = false;
+        const int off = parseLevelOffset(incAttrs.value("leveloffset"), &ok);
+        if( ok)
+            applyLevelOffset(included, off);
+    }
 
     for( int i = 0; i < included.size(); ++i)
         parent->children.insert(childIdx + i, included[i]);
@@ -267,17 +345,60 @@ bool Preprocessor::evaluateConditional(Node* parent, int childIdx)
     return true;
 }
 
-static QString extractAttr(const QString& attrsStr, const QString& key)
+void Preprocessor::expandVerbatimIncludes(Node* n, int depth)
 {
-    // extract a value like "tag=name" or "lines=1..3" from an include attribute list
-    const int ki = attrsStr.indexOf(key);
-    if( ki < 0)
-        return QString();
-    const int start = ki + key.size();
-    const int comma = attrsStr.indexOf(',', start);
-    if( comma > start)
-        return attrsStr.mid(start, comma-start).trimmed();
-    return attrsStr.mid(start).trimmed();
+    // include:: directives are also expanded inside listing blocks (----)
+    // the included content is inserted as-is
+    // literal (....) blocks are left untouched (so they can show include:: examples)
+    if( !n->text.contains("include::"))
+        return;
+    if( depth >= dmaxIncludeDepth) {
+        error(n->pos.row, "include:: depth limit exceeded (max " +
+              QString::number(dmaxIncludeDepth) + ")");
+        return;
+    }
+    const QStringList lines = n->text.split('\n');
+    QStringList out;
+    for( int i = 0; i < lines.size(); ++i) {
+        const QString trimmed = lines[i].trimmed();
+        if( trimmed.startsWith("include::") && trimmed.endsWith("]")) {
+            const QString body = trimmed.mid(9);
+            const int lb = body.indexOf('[');
+            if( lb >= 0) {
+                const QString incPath = body.left(lb).trimmed();
+                const int rb = body.lastIndexOf(']');
+                const QString attrsStr = (rb > lb) ? body.mid(lb+1, rb-(lb+1)) : QString();
+
+                QString absPath;
+                if( QFileInfo(incPath).isRelative())
+                    absPath = dbaseDir + "/" + incPath;
+                else
+                    absPath = incPath;
+
+                const QString content = readFile(absPath);
+                if( content.isNull()) {
+                    error(n->pos.row, "include file not found: " + incPath);
+                    continue;
+                }
+
+                const QMap<QString,QString> incAttrs = parseIncludeAttrs(attrsStr);
+                checkIncludeAttrs(incAttrs, n->pos.row);
+
+                QStringList incLines = content.split('\n');
+                if( incAttrs.contains("tag"))
+                    incLines = filterByTag(incLines, incAttrs.value("tag"));
+                if( incAttrs.contains("tags"))
+                    incLines = filterByTags(incLines, incAttrs.value("tags"));
+                if( incAttrs.contains("lines"))
+                    incLines = filterByLines(incLines, incAttrs.value("lines"));
+
+                out += incLines;
+                continue;
+            }
+        }
+        out.append(lines[i]);
+    }
+    n->text = out.join('\n');
 }
 
 QString Preprocessor::rewriteImagePaths(const QString& line, const QString& fromDir)
@@ -305,7 +426,7 @@ QString Preprocessor::rewriteImagePaths(const QString& line, const QString& from
     return result;
 }
 
-QString Preprocessor::flatten(const QString& filePath, const QString& outPath)
+QString Preprocessor::flatten(const QString& filePath, const QString& outPath, bool compat)
 {
     // expand all include:: directives at the source-text level, returning a single self-contained document
     // tag=/lines= filters are applied; other content is preserved verbatim
@@ -313,11 +434,155 @@ QString Preprocessor::flatten(const QString& filePath, const QString& outPath)
     dincludeStack.clear();
     doutDir = outPath.isEmpty() ? QString() : QFileInfo(outPath).absolutePath();
     const QString abs = QFileInfo(filePath).absoluteFilePath();
-    const QStringList lines = expandFile(abs, QString(), 0);
+    QStringList lines = expandFile(abs, QString(), 0, 0, false);
+    if( compat)
+        lines = toAsciidoctorCompat(lines);
     return lines.join('\n');
 }
 
-QStringList Preprocessor::expandFile(const QString& absPath, const QString& attrsStr, int depth)
+static bool isVerbatimFence(const QString& trimmed)
+{
+    return trimmed == "----" || trimmed == "...." ||
+           trimmed == "++++" || trimmed == "////";
+}
+
+static bool isListingFence(const QString& trimmed)
+{
+    return trimmed == "----";
+}
+
+static QString shiftHeadingLine(const QString& line, int off)
+{
+    // shift a section heading line (=..====== followed by space) by off levels
+    int marks = 0;
+    while( marks < line.size() && line[marks] == '=')
+        ++marks;
+    if( marks < 1 || marks >= line.size() || line[marks] != ' ')
+        return line;
+    int newMarks = marks + off;
+    if( newMarks < 1) newMarks = 1;
+    if( newMarks > 6) newMarks = 6;
+    return QString(newMarks, '=') + line.mid(marks);
+}
+
+QStringList Preprocessor::toAsciidoctorCompat(const QStringList& lines)
+{
+    // rewrite the flattened document to the shape Asciidoctor's book doctype expects
+    // parts as level-0 headings, the sections inside a part shifted up one level
+    // the front matter marked [preface], and the book attributes added to the header
+
+    bool hasParts = false;
+    bool numbered = false;
+    bool fence = false;
+    for( int i = 0; i < lines.size(); ++i) {
+        const QString trimmed = lines[i].trimmed();
+        if( isVerbatimFence(trimmed)) {
+            fence = !fence;
+            continue;
+        }
+        if( fence)
+            continue;
+        if( trimmed == "[part]")
+            hasParts = true;
+        else if( trimmed == ":numbered:" || trimmed == ":sectnums:")
+            numbered = true;
+    }
+
+    QStringList out;
+    QString curFence;
+    bool seenTitle = false;
+    bool inHeader = false;   // between the document title and the first body line
+    bool inBody = false;     // from the first part opener on
+    bool partPending = false;
+
+    for( int i = 0; i < lines.size(); ++i) {
+        const QString& line = lines[i];
+        const QString trimmed = line.trimmed();
+
+        if( isVerbatimFence(trimmed)) {
+            if( curFence.isEmpty())
+                curFence = trimmed;
+            else if( curFence == trimmed)
+                curFence.clear();
+            out.append(line);
+            continue;
+        }
+        if( !curFence.isEmpty()) {
+            out.append(line);
+            continue;
+        }
+
+        if( inHeader) {
+            if( trimmed.startsWith(':')) {
+                // ':numbered:'/':sectnums:'/':doctype:' are superseded by the
+                // compat attributes; everything else is kept
+                if( trimmed.startsWith(":numbered:") ||
+                        trimmed.startsWith(":sectnums:") ||
+                        trimmed.startsWith(":doctype:")) {
+                    continue;
+                }
+                out.append(line);
+                continue;
+            }
+            // header ends at the first non-attribute line
+            out.append(":doctype: book");
+            if( numbered) {
+                out.append(":sectnums:");
+                out.append(":sectnumlevels: 3");
+            }
+            if( hasParts) {
+                out.append(":partnums:");
+                out.append(":part-signifier: Part");
+            }
+            out.append(":chapter-signifier: Chapter");
+            out.append(":appendix-caption: Appendix");
+            inHeader = false;
+            // fall through to normal handling of this line
+        }
+
+        if( hasParts && trimmed == "[part]") {
+            // Asciidoctor uses a level-0 heading instead of a part role
+            partPending = true;
+            continue;
+        }
+
+        int marks = 0;
+        while( marks < line.size() && line[marks] == QChar('='))
+            ++marks;
+        const bool isHeading = marks >= 1 && marks < line.size() &&
+                line[marks] == QChar(' ');
+        if( isHeading) {
+            if( marks == 1 && !seenTitle) {
+                seenTitle = true;
+                inHeader = true;
+                out.append(line);
+                continue;
+            }
+            if( marks == 2 && partPending) {
+                partPending = false;
+                inBody = true;
+                out.append("=" + line.mid(2));
+                continue;
+            }
+            if( hasParts && !inBody) {
+                // front matter: the preface keeps its level and is unnumbered
+                if( marks == 2)
+                    out.append("[preface]");
+                out.append(line);
+                continue;
+            }
+            if( inBody && marks >= 3) {
+                // sections inside a part move up one level
+                out.append(line.mid(1));
+                continue;
+            }
+        }
+        out.append(line);
+    }
+    return out;
+}
+
+QStringList Preprocessor::expandFile(const QString& absPath, const QString& attrsStr, int depth, int levelShift, bool verbatim)
 {
     QStringList out;
     if( depth >= dmaxIncludeDepth) {
@@ -340,21 +605,42 @@ QStringList Preprocessor::expandFile(const QString& absPath, const QString& attr
         return out;
     }
 
-    // apply tag=/lines= filters to the raw file content
+    // apply include attribute filters to the raw file content
+    const QMap<QString,QString> incAttrs = parseIncludeAttrs(attrsStr);
+    checkIncludeAttrs(incAttrs, 0);
+
     QStringList lines = content.split('\n');
-    const QString tag = extractAttr(attrsStr, "tag=");
-    if( !tag.isEmpty())
-        lines = filterByTag(lines, tag);
-    const QString lineSpec = extractAttr(attrsStr, "lines=");
-    if( !lineSpec.isEmpty())
-        lines = filterByLines(lines, lineSpec);
+    if( incAttrs.contains("tag"))
+        lines = filterByTag(lines, incAttrs.value("tag"));
+    if( incAttrs.contains("tags"))
+        lines = filterByTags(lines, incAttrs.value("tags"));
+    if( incAttrs.contains("lines"))
+        lines = filterByLines(lines, incAttrs.value("lines"));
+
+    if( incAttrs.contains("leveloffset")) {
+        bool ok = false;
+        const int off = parseLevelOffset(incAttrs.value("leveloffset"), &ok);
+        if( ok)
+            levelShift += off;
+    }
 
     dincludeStack.insert(canonical);
     const QString baseDir = QFileInfo(absPath).path();
 
+    QString fence; // the fence delimiter we are currently inside, if any
+    bool inVerbatim = false;
     for( int i = 0; i < lines.size(); ++i) {
         const QString trimmed = lines[i].trimmed();
-        if( trimmed.startsWith("include::") && trimmed.endsWith("]")) {
+        if( !verbatim && isVerbatimFence(trimmed)) {
+            if( fence.isEmpty())
+                fence = trimmed;
+            else if( fence == trimmed)
+                fence.clear();
+            inVerbatim = !fence.isEmpty();
+        }
+        const bool expandHere = !verbatim &&
+                (fence.isEmpty() || isListingFence(fence));
+        if( expandHere && trimmed.startsWith("include::") && trimmed.endsWith("]")) {
             const QString body = trimmed.mid(9); // strip "include::"
             const int lb = body.indexOf('[');
             if( lb >= 0) {
@@ -369,11 +655,19 @@ QStringList Preprocessor::expandFile(const QString& absPath, const QString& attr
                     incAbs = incPath;
                 incAbs = QFileInfo(incAbs).absoluteFilePath();
 
-                out += expandFile(incAbs, incAttrs, depth + 1);
+                out += expandFile(incAbs, incAttrs, depth + 1, levelShift,
+                                  verbatim || inVerbatim);
                 continue;
             }
         }
-        out.append(rewriteImagePaths(lines[i], baseDir));
+        QString outLine = lines[i];
+        if( verbatim || inVerbatim) {
+            out.append(outLine);
+            continue;
+        }
+        if( levelShift != 0)
+            outLine = shiftHeadingLine(outLine, levelShift);
+        out.append(rewriteImagePaths(outLine, baseDir));
     }
 
     dincludeStack.remove(canonical);
@@ -408,6 +702,34 @@ QStringList Preprocessor::filterByTag(const QStringList& lines, const QString& t
             continue;
         }
         if( inTag)
+            result.append(lines[i]);
+    }
+    return result;
+}
+
+QStringList Preprocessor::filterByTags(const QStringList& lines, const QString& tagsSpec)
+{
+    // include the union of several tagged regions: tags=name1;name2
+    QStringList result;
+    const QStringList tags = tagsSpec.split(';', Qt::SkipEmptyParts);
+    QSet<QString> active;
+
+    for( int i = 0; i < lines.size(); ++i) {
+        const QString trimmed = lines[i].trimmed();
+        bool isMarker = false;
+        for( int t = 0; t < tags.size(); ++t) {
+            const QString tag = tags[t].trimmed();
+            if( trimmed.contains("tag::" + tag + "[]")) {
+                active.insert(tag);
+                isMarker = true;
+            } else if( trimmed.contains("end::" + tag + "[]")) {
+                active.remove(tag);
+                isMarker = true;
+            }
+        }
+        if( isMarker)
+            continue;
+        if( !active.isEmpty())
             result.append(lines[i]);
     }
     return result;

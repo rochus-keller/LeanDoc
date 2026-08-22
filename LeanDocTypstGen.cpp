@@ -81,10 +81,105 @@ QString TypstGenerator::headingMarks(int level)
     return QString(level, '=');
 }
 
+static QString unquote(QString s)
+{
+    if( s.startsWith('"') && s.endsWith('"') && s.size() >= 2)
+        s = s.mid(1, s.size()-2);
+    return s;
+}
+
+static bool hasStyle(const Node* n, const QString& style)
+{
+    if( !n->meta)
+        return false;
+    if( n->meta->roles.contains(style))
+        return true;
+    QMap<QString,QString>::ConstIterator it = n->meta->attrs.constBegin();
+    for( ; it != n->meta->attrs.constEnd(); ++it) {
+        if( it.key().startsWith("positional") && unquote(it.value()) == style)
+            return true;
+    }
+    return false;
+}
+
+static QString romanNumeral(int n)
+{
+    static const int vals[] =    { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
+    static const char* syms[] =  { "M", "CM", "D", "CD", "C", "XC", "L",
+                                   "XL", "X", "IX", "V", "IV", "I" };
+    QString r;
+    for( int i = 0; i < 13 && n > 0; ++i) {
+        while( n >= vals[i]) {
+            r += syms[i];
+            n -= vals[i];
+        }
+    }
+    return r;
+}
+
+void TypstGenerator::collectRefTargets(const Node* n)
+{
+    if( !n)
+        return;
+    if( n->kind == Node::K_Section &&
+            (!n->meta || n->meta->anchorId.isEmpty())) {
+        // anchor automatically derived from the section title
+        // only usable when unique in the document
+        const QString id = derivedSectionId(n->name);
+        if( !id.isEmpty()) {
+            if( dautoLabels.contains(id)) {
+                // several titles derive the same ID: none is usable
+                dambiguousAutoLabels.insert(id);
+                dautoLabels.remove(id);
+                drefTargets.remove(id);
+            } else if( dambiguousAutoLabels.contains(id) || drefTargets.contains(id)) {
+                // already ambiguous, or an explicit anchor owns this ID
+                dambiguousAutoLabels.insert(id);
+            } else {
+                dautoLabels.insert(id);
+                RefTarget t;
+                t.text = n->name;
+                t.numbered = !hasStyle(n, "part") && !hasStyle(n, "discrete");
+                drefTargets.insert(id, t);
+            }
+        }
+    }
+    if( n->meta && !n->meta->anchorId.isEmpty()) {
+        RefTarget t;
+        if( !n->meta->anchorText.isEmpty())
+            t.text = n->meta->anchorText;
+        else if( n->meta->attrs.contains("reftext"))
+            t.text = unquote(n->meta->attrs.value("reftext"));
+        else if( n->kind == Node::K_Section)
+            t.text = n->name;
+        if( n->kind == Node::K_Section &&
+            !hasStyle(n, "part") && !hasStyle(n, "discrete"))
+            t.numbered = true;
+        // an explicit anchor also wins over a colliding derived one
+        if( dautoLabels.contains(n->meta->anchorId)) {
+            dautoLabels.remove(n->meta->anchorId);
+            dambiguousAutoLabels.insert(n->meta->anchorId);
+        }
+        drefTargets.insert(n->meta->anchorId, t);
+    }
+    for( int i = 0; i < n->children.size(); ++i)
+        collectRefTargets(n->children[i]);
+}
+
 bool TypstGenerator::generate(const Node* doc, QTextStream& out, TypstGenError* err)
 {
     if( !doc || doc->kind != Node::K_Document)
         return failAt(err, doc, "Root node is not a Document");
+
+    dxrefStyle = doc->kv.value("attr:xrefstyle").trimmed();
+    if( dxrefStyle.isEmpty())
+        dxrefStyle = "short";
+    drefTargets.clear();
+    dautoLabels.clear();
+    dambiguousAutoLabels.clear();
+    dpartCount = 0;
+    dnumbered = doc->kv.contains("attr:numbered") || doc->kv.contains("attr:sectnums");
+    collectRefTargets(doc);
 
     if( !emitPreamble(doc, out, err))
         return false;
@@ -96,9 +191,21 @@ bool TypstGenerator::generate(const Node* doc, QTextStream& out, TypstGenError* 
         out << "]\n\n";
     }
 
-    // emit TOC if :toc: attribute present
-    if( doc->kv.contains("attr:toc"))
-        out << "#outline(depth: 3)\n#pagebreak()\n\n";
+    // emit TOC if :toc: attribute present; :toc: left/right are HTML hints,
+    // paged output always places the TOC as front matter
+    if( doc->kv.contains("attr:toc")) {
+        int depth = 3;
+        if( doc->kv.contains("attr:toclevels")) {
+            bool ok = false;
+            const int lv = doc->kv.value("attr:toclevels").trimmed().toInt(&ok);
+            if( ok && lv >= 1 && lv <= 5)
+                depth = lv;
+        }
+        out << "#outline(";
+        if( doc->kv.contains("attr:toc-title"))
+            out << "title: [" << escText(doc->kv.value("attr:toc-title").trimmed()) << "], ";
+        out << "depth: " << depth << ")\n#pagebreak()\n\n";
+    }
 
     // shift heading levels: doc title is level 1 (extracted), body starts at level 2
     int shift = doc->kv.contains("title") ? -1 : 0;
@@ -194,11 +301,47 @@ bool TypstGenerator::emitNode(const Node* n, QTextStream& out, TypstGenError* er
     }
 }
 
+QString TypstGenerator::sectionLabel(const Node* n) const
+{
+    if( n->meta && !n->meta->anchorId.isEmpty())
+        return labelSuffix(n->meta);
+    const QString id = derivedSectionId(n->name);
+    if( !id.isEmpty() && dautoLabels.contains(id))
+        return " <" + id + ">";
+    return QString();
+}
+
 bool TypstGenerator::emitSection(const Node* n, QTextStream& out, TypstGenError* err, int headingShift)
 {
     int level = n->level + headingShift;
     if( level < 1 )
         level = 1;
+
+    const bool isPart = hasStyle(n, "part");
+    const bool isDiscrete = hasStyle(n, "discrete");
+
+    if( isPart || isDiscrete) {
+        // parts get their own Roman numbering; discrete headings are
+        // unnumbered and (for discrete) excluded from the outline
+        out << "#heading(level: " << level << ", numbering: none";
+        if( isDiscrete)
+            out << ", outlined: false";
+        out << ")[";
+        if( isPart)
+            out << "Part " << romanNumeral(++dpartCount) << ": ";
+        if( !n->titleChildren.isEmpty()) {
+            if( !emitInlineSeq(n->titleChildren, out, err))
+                return false;
+        } else
+            out << escText(n->name);
+        out << "]" << sectionLabel(n) << "\n\n";
+        for( int i=0;i<n->children.size();++i ) {
+            if( !emitNode(n->children[i], out, err, headingShift))
+                return false;
+            out << "\n";
+        }
+        return true;
+    }
 
     out << headingMarks(level) << " ";
     if( !n->titleChildren.isEmpty()) {
@@ -207,7 +350,7 @@ bool TypstGenerator::emitSection(const Node* n, QTextStream& out, TypstGenError*
     } else {
         out << escText(n->name);
     }
-    out << labelSuffix(n->meta) << "\n\n";
+    out << sectionLabel(n) << "\n\n";
     for( int i=0;i<n->children.size();++i ) {
         if( !emitNode(n->children[i], out, err, headingShift))
             return false;
@@ -612,7 +755,19 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
 
     case Node::K_Xref:
         if( n->children.isEmpty()) {
-            out << "#link(<" << n->target << ">)[" << escText(n->target) << "]";
+            // bare <<id>>: honor reftext and :xrefstyle:
+            const RefTarget t = drefTargets.value(n->target);
+            if( t.numbered && dnumbered && dxrefStyle != "basic") {
+                // short/full: Typst renders supplement + number (e.g. "Section 2.1")
+                out << "#ref(<" << n->target << ">)";
+                if( dxrefStyle == "full" && !t.text.isEmpty())
+                    out << "#link(<" << n->target << ">)[, \u201C"
+                        << escText(t.text) << "\u201D]";
+            } else if( !t.text.isEmpty()) {
+                out << "#link(<" << n->target << ">)[" << escText(t.text) << "]";
+            } else {
+                out << "#link(<" << n->target << ">)[" << escText(n->target) << "]";
+            }
         } else {
             out << "#link(<" << n->target << ">)[";
             if( !emitInlineSeq(n->children, out, err))

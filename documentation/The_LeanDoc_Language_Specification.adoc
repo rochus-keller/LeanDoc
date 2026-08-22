@@ -12,7 +12,7 @@
 
 === Version
 
-2026-06-09, work in progress
+2026-08-19, work in progress
 
 === Author
 
@@ -779,14 +779,43 @@ opens the link in a new window.
 `mailto:user@example.org[Contact]` for custom text.
 
 *Anchors*: `\[[id]]` defines a target for cross-referencing. Place it
-before any block. Section headings also generate automatic anchors from
-their text. Anchor IDs are case-sensitive. [[MyId]] and [[myid]] define 
-distinct anchors. Cross-references must match the declared ID exactly.
+before any block. Section headings also generate automatic anchors
+derived from the title text: the title is lowercased, whitespace runs
+are replaced with a single hyphen, and all other special characters are
+removed (`==== Basic types` yields the anchor `basic-types`). An
+explicit `\[[id]]` anchor on a section replaces its derived anchor. If
+several section titles derive the same ID, that derived ID is ambiguous
+and not a valid target; add explicit anchors to disambiguate. The
+literal title text itself (with original case and spaces) is never a
+target. Anchor IDs are case-sensitive. [[MyId]] and [[myid]] define
+distinct anchors. Cross-references must match the declared or derived
+ID exactly.
 
 *Cross-references*: `\<<id>>` links to an anchor within the same
 document. `\<<id, display text>>` provides custom display text.
 The `xref:` macro form supports inter-document references:
 `xref:other-doc.adoc#section[text]`.
+
+==== Cross-Reference Text
+
+The text rendered for a bare `\<<id>>` reference is controlled by the
+`:xrefstyle:` document attribute:
+
+* `short` (default) -- the target's number with its kind, e.g.
+  "Section 3.1", "Chapter 2", "Appendix B", "Part II", "Table 4"
+* `full` -- number plus quoted title, e.g. "Section 3.1, 'Types'"
+* `basic` -- the target's title only, e.g. "Types"
+
+A per-anchor override is available through the anchor's reference text:
+the optional second argument of a block anchor (`\[[id, reference text]]`)
+or the `reftext` attribute on the block metadata line
+(`[reftext="chapter 3"]`). When present, the reference text is rendered
+verbatim for every bare `\<<id>>` pointing at that anchor, regardless
+of `:xrefstyle:`. Explicit display text (`\<<id, display text>>`)
+always takes precedence over both.
+
+NOTE: This matches Asciidoctor's `xrefstyle` attribute and `reftext`
+override, except that LeanDoc's default is `short` rather than `full`.
 
 [[Images]]
 === Images
@@ -898,8 +927,30 @@ include::data.txt[lines=5..10]
 Tag selection works with tag markers in the included file:
 `// tag::name[]` and `// end::name[]`.
 
+The include directive accepts exactly the following attributes; any
+other attribute is a validation error:
+
+* `tag=name` -- include only the region between `tag::name[]` and
+  `end::name[]` markers
+* `tags=name1;name2` -- include several tagged regions
+* `lines=5..10` -- include only the given line range
+* `leveloffset=+N` (also `-N` or absolute `N`) -- shift the section
+  levels of the included content by N. With `leveloffset=+1`, a `==`
+  heading in the included file behaves as `===` in the including
+  document. This lets chapter files be written as standalone documents
+  and assembled at any depth. Tools that expand includes textually
+  (flattening) must rewrite the heading markers accordingly.
+
 This is essential for large documents (books, multi-file specifications)
 where content is split across files.
+
+Include directives are recognized outside of delimited blocks and inside
+listing blocks (`----`), where they pull external code into the listing
+verbatim (tag, tags and lines selection applies; leveloffset does not).
+Inside literal (`....`), passthrough (`++++`) and comment (`////`)
+blocks, `include::` lines are ordinary content and are not expanded, so
+these blocks can display include examples. Content pulled into a listing
+is inserted as-is; it is never scanned for nested includes or headings.
 
 [[preprocessor-directives]]
 === Preprocessor Directives
@@ -1087,6 +1138,45 @@ Attributes can be set in the document header or anywhere in the body.
 An attribute can be unset by omitting the value: `:name:` defines the
 attribute (useful for `ifdef` tests), while `:name!:` unsets it.
 
+==== Behavioral Document Attributes
+
+A fixed set of document attributes controls processing and rendering
+behavior. These form a closed vocabulary:
+
+[options="header"]
+|===
+|Attribute |Values |Meaning
+
+|`toc`
+|(empty), `auto`, `preamble`, `left`, `right`
+|Enable the table of contents. `auto` (the default when the value is
+empty) places it after the document title, `preamble` after the
+preamble. `left` and `right` are rendering hints for HTML backends
+(sidebar placement); paged backends (PDF, Typst) ignore the placement
+and emit the TOC as front matter after the title page.
+
+|`toclevels`
+|`1`..`5`
+|Section depth shown in the TOC (default 2).
+
+|`toc-title`
+|text
+|Title of the TOC (default "Table of Contents").
+
+|`sectnums` / `numbered`
+|(empty)
+|Enable section numbering. `numbered` is the legacy AsciiDoc alias.
+
+|`xrefstyle`
+|`short`, `full`, `basic`
+|Rendering of bare cross-references (see <<links-and-cross-references>>).
+|===
+
+Any attribute name not in this vocabulary is a *user attribute*: it is
+defined for `{name}` substitution and `ifdef`/`ifndef` tests and has no
+processing effect. Validators must not reject user attributes, but must
+reject invalid *values* of behavioral attributes.
+
 ==== Text Replacements
 
 LeanDoc automatically converts common character sequences to their
@@ -1122,6 +1212,7 @@ behavior depends on context. In LeanDoc, the backslash escape always
 works the same way. When in doubt about whether a character will be
 interpreted as markup, escape it.
 
+[[special-sections]]
 === Special Sections
 
 Special sections are normal sections with a semantic role attribute:
@@ -1139,12 +1230,67 @@ In text: See <<taoup>> for details.
 
 The following roles are supported:
 
+The following section roles are supported; any other role on a section
+is a validation error:
+
+* `[part]` -- part heading (see <<Parts>>)
 * `[bibliography]` -- bibliographic references (entries use
   `[[[id]]] text` syntax)
 * `[glossary]` -- term definitions (use description list format)
 * `[index]` -- auto-generated index
 * `[abstract]` -- document abstract or summary
-* `[appendix]` -- appendix (numbered A, B, C...)
+* `[appendix]` -- appendix (see <<Parts>> for the numbering scheme)
+* `[discrete]` -- discrete heading (see below)
+
+==== Discrete Headings
+
+`[discrete]` turns a heading into a standalone heading that does not
+participate in the section hierarchy: it receives no section number,
+does not appear in the table of contents, and does not open a new
+section (the enclosing section continues after it). This is useful for
+headings inside sidebars or for front-matter headings.
+
+[[Parts]]
+==== Parts and Numbering Scheme
+
+`[part]` marks a top-level (`==`) section as a part heading, dividing
+a large document (typically a book) into parts:
+
+....
+[part]
+== The Language and Its Reasons
+
+== Why Micron
+
+== A Tour of the Language
+....
+
+Semantics:
+
+* A part is excluded from ordinary section numbering. Parts are
+  numbered in their own sequence with uppercase Roman numerals
+  (Part I, Part II, ...).
+* The top-level sections following a part heading (up to the next
+  `[part]` section or the end of the document) are nested under the
+  part in the table of contents, but keep their own top-level
+  numbering.
+* Chapter numbers run continuously across parts (as in AsciiDoc's
+  book doctype): if Part I ends with chapter 3, Part II starts with
+  chapter 4.
+* `[part]` is only valid on level-1 (`==`) sections.
+* A part heading has no body of its own beyond optional introductory
+  blocks before the next section.
+
+`[appendix]` sections are lettered in a single document-global
+sequence (A, B, C, ...) independent of parts, with subsections
+numbered A.1, A.2, and so on.
+
+NOTE: `[part]` is a LeanDoc extension: the syntax is valid AsciiDoc
+(a block style attribute), but Asciidoctor does not know the style and
+renders such a section as an ordinary numbered section. AsciiDoc's own
+part construct (the book doctype with level-0 headings after the
+document title) was deliberately not adopted because of its context
+sensitivity. This is a known, documented semantic divergence.
 
 == Differences from AsciiDoc
 
@@ -1200,6 +1346,37 @@ with no substitution phases. The parser builds a complete AST in a
 single pass, and the renderer traverses it to produce output. This makes
 LeanDoc's behavior fully predictable: the same input always produces the
 same AST regardless of context.
+
+=== Conformance and Validation
+
+LeanDoc is strict by default. A conforming validator must report an
+error (not silently accept) for:
+
+* unknown section roles (the closed vocabulary of <<special-sections>>)
+* roles from that vocabulary applied outside their valid context
+  (e.g., `[appendix]` on a paragraph, `[part]` below level 1)
+* invalid values of behavioral document attributes (the closed
+  vocabulary of <<Attributes>>)
+* unknown include-directive attributes (the closed vocabulary of
+  <<include-directive>>)
+* unknown table attributes and options
+* unresolved or malformed cross-references and duplicate anchors
+
+User-defined substitution attributes (`:name: value` outside the
+behavioral vocabulary) remain open and are always accepted.
+
+Tools must not emit derived output (e.g., a flattened document) for an
+invalid source tree: validation runs first, and generation is skipped
+with a non-zero exit status if any error is present.
+
+In addition to the LeanDoc-faithful flattened form, a tool may offer a
+separate, mutually exclusive Asciidoctor-compatibility flattening that
+rewrites the output to the shape Asciidoctor's book doctype expects:
+`:doctype: book` and related attributes are added to the header,
+`[part]` sections become level-0 headings (`= Title`) with the sections
+inside a part shifted up one level, and front-matter sections before the
+first part are marked `[preface]`. This transformation affects only the
+derived output; the LeanDoc source language is unchanged.
 
 == Implementation Notes for Parser Writers
 
@@ -1661,6 +1838,30 @@ how.
 |
 
 |Appendix section
+|Identical
+|Lettered A, B, C... in a document-global sequence
+
+|Book parts (doctype + `= Part`)
+|`[part]` role instead
+|Roman numbering; syntax is valid AsciiDoc, semantics are a LeanDoc extension
+
+|Preface section
+|Not supported
+|Use a plain section before the first chapter
+
+|`:xrefstyle:` (`short`/`full`/`basic`)
+|Identical
+|Default is `short` (AsciiDoc defaults to `full`)
+
+|`reftext` anchor override
+|Identical
+|`\[[id, reference text]]` or `[reftext="..."]`
+
+|`:toc:` placement values
+|`auto`/`preamble`/`left`/`right`
+|`macro` (`toc::[]`) not supported
+
+|Include `leveloffset`
 |Identical
 |
 

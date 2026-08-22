@@ -130,6 +130,8 @@ public:
     }
 };
 
+QString derivedSectionId(const QString& title);
+
 struct TableCellSpec {
     int colspan;
     int rowspan;

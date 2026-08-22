@@ -43,6 +43,7 @@ public:
 
 private:
     void collectAnchors(const Node* n);
+    void collectAutoAnchors(const Node* n);
     void checkNode(const Node* n);
 
     void checkTableAttrs(const Node* n);
@@ -50,6 +51,7 @@ private:
     void checkXref(const Node* n);
     void checkSourceAttrContext(const Node* n);
     void checkRoleContext(const Node* n);
+    void checkDocAttrs(const Node* doc);
     void checkColsOnNonTable(const Node* n);
     void checkTableCellCount(const Node* n);
     void checkAdmonitionAttrContext(const Node* n);
@@ -59,6 +61,8 @@ private:
 
     QSet<QString> danchors; // declared anchor IDs
     QMap<QString, int> danchorLines; // anchor ID -> first occurrence line
+    QSet<QString> dautoAnchors; // IDs derived from section titles
+    QSet<QString> dambiguousAutoAnchors; // derived IDs occurring more than once
 };
 
 } // namespace LeanDoc

@@ -49,11 +49,16 @@ void Validator::validate(const Node* doc)
     diagnostics.clear();
     danchors.clear();
     danchorLines.clear();
+    dautoAnchors.clear();
+    dambiguousAutoAnchors.clear();
 
     if( !doc || doc->kind != Node::K_Document)
         return;
 
     collectAnchors(doc);
+    collectAutoAnchors(doc);
+
+    checkDocAttrs(doc);
 
     // check attributes, references, context, etc.
     checkNode(doc);
@@ -107,6 +112,27 @@ void Validator::collectAnchors(const Node* n)
         collectAnchors(n->children[i]);
 }
 
+void Validator::collectAutoAnchors(const Node* n)
+{
+    if( !n )
+        return;
+
+    // section titles automatically become anchors
+    if( n->kind == Node::K_Section &&
+            (!n->meta || n->meta->anchorId.isEmpty())) {
+        const QString id = derivedSectionId(n->name);
+        if( !id.isEmpty()) { // an explicit [[id]] anchor replaces the derived one
+            if( danchors.contains(id) || dautoAnchors.contains(id))
+                dambiguousAutoAnchors.insert(id);
+            else
+                dautoAnchors.insert(id);
+        }
+    }
+
+    for( int i = 0; i < n->children.size(); ++i)
+        collectAutoAnchors(n->children[i]);
+}
+
 void Validator::checkNode(const Node* n)
 {
     if( !n )
@@ -122,15 +148,18 @@ void Validator::checkNode(const Node* n)
         break;
     case Node::K_DelimitedBlock:
         checkBlockAttrs(n);
+        checkRoleContext(n);
         checkSourceAttrContext(n);
         checkAdmonitionAttrContext(n);
         break;
     case Node::K_List:
         checkBlockAttrs(n);
+        checkRoleContext(n);
         checkColsOnNonTable(n);
         break;
     case Node::K_Paragraph:
         checkBlockAttrs(n);
+        checkRoleContext(n);
         checkColsOnNonTable(n);
         break;
     case Node::K_Section:
@@ -140,7 +169,12 @@ void Validator::checkNode(const Node* n)
         break;
     case Node::K_AdmonitionParagraph:
         checkBlockAttrs(n);
+        checkRoleContext(n);
         checkColsOnNonTable(n);
+        break;
+    case Node::K_BlockMacro:
+        checkBlockAttrs(n);
+        checkRoleContext(n);
         break;
     default:
         break;
@@ -270,7 +304,7 @@ void Validator::checkBlockAttrs(const Node* n)
             continue;
 
         // known valid general attributes
-        if( key == "id" || key == "role" || key == "options")
+        if( key == "id" || key == "role" || key == "options" || key == "reftext")
             continue;
 
         // known valid named attributes for delimited/code blocks
@@ -351,26 +385,92 @@ void Validator::checkAdmonitionAttrContext(const Node* n)
     }
 }
 
+static bool isSectionRole(const QString& role)
+{
+    // the closed vocabulary of section roles per spec
+    return role == "part" || role == "bibliography" || role == "appendix" ||
+           role == "glossary" || role == "index" || role == "abstract" ||
+           role == "discrete";
+}
+
+static bool isKnownBlockStyle(const QString& s)
+{
+    // block styles valid as the first positional attribute of non-section blocks
+    return s == "source" || s == "quote" || s == "verse" || s == "listing" ||
+           s == "literal" || s == "example" || s == "sidebar" ||
+           s == "NOTE" || s == "TIP" || s == "WARNING" ||
+           s == "CAUTION" || s == "IMPORTANT";
+}
+
 void Validator::checkRoleContext(const Node* n)
 {
     if( !n->meta)
         return;
 
-    // validate roles for correct context
     const QMap<QString, QString>& a = n->meta->attrs;
     for( QMap<QString, QString>::ConstIterator it = a.constBegin(); it != a.constEnd(); ++it) {
-        if( it.key() == "role" || (it.key().startsWith("positional") && it.value().startsWith('.'))) {
-            QString role = it.value();
-            if( role.startsWith('.'))
-                role = role.mid(1);
+        const bool isStyle = it.key() == "positional0";
+        const bool isRoleAttr = it.key() == "role";
+        if( !isStyle && !isRoleAttr)
+            continue;
 
-            // bibliography/appendix/glossary/index roles only valid on sections
-            if( role == "bibliography" || role == "appendix" ||
-                role == "glossary" || role == "index" || role == "abstract") {
-                if( n->kind != Node::K_Section)
-                    error(n->pos.row, "role '" + role + "' is only valid on section blocks");
+        QString role = it.value();
+        if( role.startsWith('"') && role.endsWith('"'))
+            role = role.mid(1, role.size()-2);
+        if( role.startsWith('.'))
+            role = role.mid(1);
+
+        if( n->kind == Node::K_Section) {
+            if( isRoleAttr)
+                continue; // [role="..."] custom CSS roles remain open
+            if( !isSectionRole(role)) {
+                error(n->pos.row, "unknown section role '" + role +
+                      "'; valid roles are part, bibliography, glossary, "
+                      "index, abstract, appendix, discrete");
+                continue;
             }
+            if( role == "part" && n->level != 2) // '==' sections carry level 2
+                error(n->pos.row, "[part] is only valid on level-1 (==) sections");
+        } else {
+            // section roles applied outside a section are errors
+            if( isSectionRole(role))
+                error(n->pos.row, "role '" + role + "' is only valid on section blocks");
+            else if( isStyle && !isKnownBlockStyle(role) && n->kind != Node::K_Table)
+                error(n->pos.row, "unknown block style '" + role + "'");
         }
+    }
+}
+
+void Validator::checkDocAttrs(const Node* doc)
+{
+    const int line = doc->pos.row;
+    QMap<QString,QString>::ConstIterator it = doc->kv.constBegin();
+    for( ; it != doc->kv.constEnd(); ++it) {
+        if( !it.key().startsWith("attr:"))
+            continue;
+        const QString name = it.key().mid(5);
+        const QString val = it.value().trimmed();
+
+        if( name == "toc") {
+            if( !val.isEmpty() && val != "auto" && val != "preamble" &&
+                val != "left" && val != "right")
+                error(line, "invalid ':toc:' value '" + val +
+                      "'; expected auto, preamble, left or right");
+        } else if( name == "toclevels") {
+            bool ok = false;
+            const int lv = val.toInt(&ok);
+            if( !ok || lv < 1 || lv > 5)
+                error(line, "invalid ':toclevels:' value '" + val +
+                      "'; expected a number from 1 to 5");
+        } else if( name == "xrefstyle") {
+            if( val != "short" && val != "full" && val != "basic")
+                error(line, "invalid ':xrefstyle:' value '" + val +
+                      "'; expected short, full or basic");
+        } else if( name == "sectnums" || name == "numbered") {
+            if( !val.isEmpty())
+                error(line, "':" + name + ":' takes no value");
+        }
+        // any other attribute is a user attribute (open vocabulary)
     }
 }
 
@@ -387,10 +487,18 @@ void Validator::checkXref(const Node* n)
 {
     if( n->target.isEmpty()) return;
 
-    // block IDs are case-sensitive and must be explicitly declared
     const QString id = n->target.trimmed();
-    if( !danchors.contains(id) )
-        warn(n->pos.row, "unresolved cross-reference '<<" + id + ">>'");
+    if( danchors.contains(id))
+        return;
+    if( dambiguousAutoAnchors.contains(id)) {
+        warn(n->pos.row, "ambiguous cross-reference '<<" + id +
+             ">>': several section titles derive this anchor ID; "
+             "add an explicit [[" + id + "]] anchor");
+        return;
+    }
+    if( dautoAnchors.contains(id))
+        return;
+    warn(n->pos.row, "unresolved cross-reference '<<" + id + ">>'");
 }
 
 void Validator::warn(int line, const QString& msg)

@@ -69,12 +69,13 @@ int main(int argc, char** argv)
         err << "Usage:\n"
             << "  leandoc --typst <in.adoc> -o <out.typ> [--template plain|report] [--template-file tpl.typ]\n"
             << "  leandoc --flatten <in.adoc> -o <out.adoc>\n"
+            << "  leandoc --flatten-compat <in.adoc> -o <out.adoc>\n"
             << "  leandoc --ast <in.adoc>\n"
             << "  leandoc <in.adoc>\n";
         return 2;
     }
 
-    bool modeAst = false, modeTypst = false, modeFlatten = false;
+    bool modeAst = false, modeTypst = false, modeFlatten = false, modeFlattenCompat = false;
     QString inPath, outPath = "output.typ";
     TypstGenerator::Options genOpt;
 
@@ -88,6 +89,10 @@ int main(int argc, char** argv)
             modeTypst = true;
         } else if (a == "--flatten") {
             modeFlatten = true;
+            modeAst = false;
+            modeTypst = false;
+        } else if (a == "--flatten-compat") {
+            modeFlattenCompat = true;
             modeAst = false;
             modeTypst = false;
         } else if (a == "-o" && i+1 < args.size())
@@ -107,12 +112,56 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    if (modeFlatten && modeFlattenCompat) {
+        err << "Error: --flatten and --flatten-compat exclude each other.\n";
+        return 2;
+    }
+
     QString ioErr;
 
-    if (modeFlatten) {
+    if (modeFlatten || modeFlattenCompat) {
+        // validate the source tree first; no output on errors
+        QString text;
+        if (!readFileUtf8(inPath, &text, &ioErr)) {
+            err << ioErr << "\n";
+            return 2;
+        }
+
+        Parser parser;
+        Node* doc = parser.parse(text);
+        if (!doc) {
+            err << "Parse failed (null result)\n";
+            return 1;
+        }
+        for (int i = 0; i < parser.errors.size(); ++i)
+            err << "Error at line " << parser.errors[i].pos.row << ": " << parser.errors[i].message << "\n";
+
+        Preprocessor checkPre;
+        checkPre.setBaseDir(QFileInfo(inPath).absolutePath());
+        checkPre.process(doc);
+        for (int i = 0; i < checkPre.errors.size(); ++i)
+            err << "Error at line " << checkPre.errors[i].line << ": " << checkPre.errors[i].message << "\n";
+
+        Validator validator;
+        validator.validate(doc);
+        int valErrors = 0;
+        for (int i = 0; i < validator.diagnostics.size(); ++i) {
+            const Diagnostic& d = validator.diagnostics[i];
+            if (d.level == Diagnostic::Error)
+                ++valErrors;
+            err << (d.level == Diagnostic::Error ? "Error" : "Warning")
+                << " at line " << d.line << ": " << d.message << "\n";
+        }
+        Node::deleteTree(doc);
+
+        if (!parser.errors.isEmpty() || !checkPre.errors.isEmpty() || valErrors > 0) {
+            err << "Validation failed; no flattened output written.\n";
+            return 1;
+        }
+
         // expand all include:: directives into a single union .adoc file
         Preprocessor preproc;
-        const QString merged = preproc.flatten(inPath, outPath);
+        const QString merged = preproc.flatten(inPath, outPath, modeFlattenCompat);
         for (int i = 0; i < preproc.errors.size(); ++i)
             err << "Error: " << preproc.errors[i].message << "\n";
         if (!preproc.errors.isEmpty())

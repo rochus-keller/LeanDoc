@@ -44,7 +44,7 @@ public:
 
     bool process(Node* doc);
 
-    QString flatten(const QString& filePath, const QString& outPath = QString());
+    QString flatten(const QString& filePath, const QString& outPath = QString(), bool compat = false);
 
     QList<PreprocessorError> errors;
 
@@ -58,11 +58,16 @@ private:
     void substituteAttrRefs(Node* n);
     void substituteInlineList(QList<Node*>& inl);
 
-    QStringList expandFile(const QString& absPath, const QString& attrsStr, int depth);
+    QStringList expandFile(const QString& absPath, const QString& attrsStr, int depth, int levelShift, bool verbatim);
+    QStringList toAsciidoctorCompat(const QStringList& lines);
+    void expandVerbatimIncludes(Node* n, int depth);
+    void checkIncludeAttrs(const QMap<QString,QString>& attrs, int line);
+    static int parseLevelOffset(const QString& raw, bool* ok);
     QString rewriteImagePaths(const QString& line, const QString& fromDir);
 
     QString readFile(const QString& path);
     QStringList filterByTag(const QStringList& lines, const QString& tag);
+    QStringList filterByTags(const QStringList& lines, const QString& tagsSpec);
     QStringList filterByLines(const QStringList& lines, const QString& spec);
 
     void error(int line, const QString& msg);

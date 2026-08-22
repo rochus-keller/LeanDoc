@@ -21,6 +21,8 @@
 */
 
 #include <QtCore/QString>
+#include <QtCore/QMap>
+#include <QtCore/QSet>
 #include <QtCore/QTextStream>
 #include <QtCore/QFile>
 
@@ -43,7 +45,7 @@ public:
         Options() : templateName("plain"), allowRawPassthrough(true) {}
     };
 
-    explicit TypstGenerator(const Options& opt) : dopt(opt) {}
+    explicit TypstGenerator(const Options& opt) : dopt(opt), dpartCount(0), dnumbered(false) {}
 
     bool generate(const Node* doc, QTextStream& out, TypstGenError* err);
 
@@ -70,7 +72,22 @@ private:
     static QString labelSuffix(const BlockMeta* m);
     static QString headingMarks(int level);
 
+    void collectRefTargets(const Node* n);
+    QString sectionLabel(const Node* n) const;
+
+    struct RefTarget {
+        QString text;      // reftext or section title
+        bool numbered;     // a numbered section usable with Typst #ref
+        RefTarget() : numbered(false) {}
+    };
+
     Options dopt;
+    QString dxrefStyle;
+    QMap<QString, RefTarget> drefTargets;
+    QSet<QString> dautoLabels;  // usable auto-derived section IDs
+    QSet<QString> dambiguousAutoLabels; // derived IDs that are not unique
+    int dpartCount;
+    bool dnumbered;
 };
 
 } // namespace LeanDoc

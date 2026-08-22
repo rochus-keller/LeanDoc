@@ -4,6 +4,9 @@ LeanDoc is a semantic document markup language designed to cover the essential s
 while being formally specified and parsable by a single recursive descent parser. The language prioritizes minimal boilerplate 
 syntax, uniform constructs, and ease of learning for the most commonly used features.
 
+LeanDoc so far has proven useful for a lot of my specifications, a few primers and users guide, and an emerging book. It is
+adapted, extended and fixed as need be.
+
 **NOTE** that this project is work-in-progress.
 
 ### Why LeanDoc
@@ -75,6 +78,7 @@ no `kbd:`, `btn:`, `menu:` macros,
 - [x] Processing includes and conditional compilation
 - [x] Typst generator (WIP)
 - [ ] Integration with Typos engine
+- [ ] IDE/authoring tool like LyX or novelWriter
 
 ### Status on January 10, 2026
 
@@ -98,6 +102,13 @@ a good opportunity to migrate the spec to LeanDoc itself. Also the Typst generat
 Extended validator checks. Implemented includes and conditional compilation. Developed and tested in-project with EXPRESS book.
 New --flatten option. Made attribute declarations and references work. Implemented table formats, attributes, images and
 includes in Typst generator.
+
+### Status on Aug 22, 2026
+
+New insights while writing my Micron book, which has parts; so I added the [part] section role, but not with the quirky semantics of Asciidoctor,
+but just like the other section roles; to be still compatible with the latter, there is now a --flatten-compat mode. It also turned out that
+other features like xrefstyle, discrete, toclevels, toc position, and include level correction are unavoidable for a real book project. And
+there were a lot of things to fix and clarify. The validator now rejects unknown roles.
 
 ### Additional Credits
 

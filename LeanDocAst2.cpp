@@ -20,6 +20,26 @@
 #include "LeanDocAst2.h"
 using namespace LeanDoc;
 
+QString LeanDoc::derivedSectionId(const QString& title)
+{
+    QString id;
+    id.reserve(title.size());
+    const QString t = title.trimmed().toLower();
+    for( int i = 0; i < t.size(); ++i) {
+        const QChar c = t[i];
+        if( c.isLetterOrNumber() || c == '_' || c == '-')
+            id += c;
+        else if( c.isSpace()) {
+            if( !id.isEmpty() && !id.endsWith('-'))
+                id += '-';
+        }
+        // other special characters are removed
+    }
+    while( id.endsWith('-'))
+        id.chop(1);
+    return id;
+}
+
 const char* Node::nodeKindName(Kind k)
 {
     switch (k) {
