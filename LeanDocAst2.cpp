@@ -20,6 +20,9 @@
 #include "LeanDocAst2.h"
 using namespace LeanDoc;
 
+static QHash<QString,quint16> fileHash;
+static QList<QString> fileList;
+
 QString LeanDoc::derivedSectionId(const QString& title)
 {
     QString id;
@@ -40,7 +43,7 @@ QString LeanDoc::derivedSectionId(const QString& title)
     return id;
 }
 
-const char* Node::nodeKindName(Kind k)
+const char* Node::nodeKindName(quint8 k)
 {
     switch (k) {
     case K_Document:
@@ -167,4 +170,27 @@ void Node::dump(QTextStream &out, int depth)
 
     for( int i=0;i<children.size();++i )
         children[i]->dump(out, depth+1);
+}
+
+quint16 Node::fileId(const QString & path)
+{
+    quint16 res = fileHash.value(path);
+    if( res == 0 && fileList.size() < 65535 )
+    {
+        fileList.append(path);
+        res = fileList.size();
+        fileHash.insert(path,res);
+    }
+    return res;
+}
+
+QString Node::fileName(quint16 id)
+{
+    if( id == 0 )
+        return QString();
+    id--;
+    if( id < fileList.size() )
+        return fileList[id];
+    else
+        return QString();
 }

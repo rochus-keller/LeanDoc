@@ -92,14 +92,19 @@ public:
     enum CheckState { CS_None, CS_Unchecked, CS_Checked, CS_Intermediate };
 
     explicit Node(Kind k)
-        : kind(k), pos(), meta(0),
+        : kind(k), file(0), pos(), meta(0),
           level(0), delimKind(DK_None), listType(LT_None), checkState(CS_None) {}
     virtual ~Node() {}
 
+#ifdef _DEBUG
     Kind kind;
+#else
+    quint8 kind;
+#endif
+    quint16 file;
     RowCol pos;
 
-    static const char* nodeKindName(Node::Kind k);
+    static const char* nodeKindName(quint8 k);
     const char* nodeKindName() const { return nodeKindName(kind); }
     void dump(QTextStream& out, int depth = 0);
 
@@ -128,6 +133,9 @@ public:
         delete n->meta;
         delete n;
     }
+
+    static quint16 fileId(const QString&);
+    static QString fileName(quint16);
 };
 
 QString derivedSectionId(const QString& title);

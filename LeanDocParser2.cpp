@@ -204,13 +204,13 @@ bool Parser::expect(LineTok::Kind k, const char* where)
         take();
         return true;
     }
-    errors << Error(QString("expected %1 in %2").arg(LineTok::kindName(k)).arg(where), la(0).lineNo, 1);
+    errors << Error(QString("expected %1 in %2").arg(LineTok::kindName(k)).arg(where), file, la(0).lineNo, 1);
     return false;
 }
 
 void Parser::error(const QString& msg, int row, int col)
 {
-    errors << Error(msg, row, col);
+    errors << Error(msg, file, row, col);
 }
 
 void Parser::skipBlankLines()
@@ -290,10 +290,11 @@ QMap<QString, QString> Parser::parseAttrList(const QString& bracketed, int lineN
     return res;
 }
 
-Node* Parser::parse(const QString& input)
+Node* Parser::parse(const QString& input, const QString& path)
 {
     errors.clear();
     dlex.setInput(input);
+    file = Node::fileId(path);
     return parseDocument();
 }
 
@@ -301,12 +302,14 @@ Node* Parser::parseDocument()
 {
     Node* doc = new Node(Node::K_Document);
     doc->pos = RowCol(1, 1);
+    doc->file = file;
 
     // skip leading comments and blanks before header
     while( la(0).kind == LineTok::T_BLANK || la(0).kind == LineTok::T_LINE_COMMENT) {
         if( la(0).kind == LineTok::T_LINE_COMMENT) {
             Node* c = new Node(Node::K_LineComment);
             c->pos = RowCol(la(0).lineNo, 1);
+            c->file = file;
             c->text = la(0).raw.trimmed().mid(2);
             doc->add(c);
         }
@@ -531,6 +534,7 @@ Node* Parser::parseSection(BlockMeta* m)
 
     Node* n = new Node(Node::K_Section);
     n->pos = RowCol(t.lineNo, 1);
+    n->file = file;
     n->meta = m;
     n->level = lvl;
     n->name = sectionTitle(t.raw);
@@ -611,6 +615,7 @@ Node* Parser::parseParagraphOrLiteral(BlockMeta* m)
 
     Node* p = new Node(literal ? Node::K_LiteralParagraph : Node::K_Paragraph);
     p->pos = RowCol(la(0).lineNo, 1);
+    p->file = file;
     p->meta = m;
 
     QStringList lines;
@@ -649,6 +654,7 @@ Node* Parser::parseAdmonitionParagraph(BlockMeta* m)
 
     Node* a = new Node(Node::K_AdmonitionParagraph);
     a->pos = RowCol(t.lineNo, 1);
+    a->file = file;
     a->meta = m;
     a->name = s.left(colon);
 
@@ -721,6 +727,7 @@ Node* Parser::parseList(BlockMeta* m)
 {
     Node* lst = new Node(Node::K_List);
     lst->pos = RowCol(la(0).lineNo, 1);
+    lst->file = file;
     lst->meta = m;
 
     if( la(0).kind == LineTok::T_DESC_TERM)
@@ -747,6 +754,7 @@ Node* Parser::parseList(BlockMeta* m)
 
             Node* item = new Node(Node::K_ListItem);
             item->pos = RowCol(termTok.lineNo, 1);
+            item->file = file;
             item->level = c;
             item->name = ts.left(ts.size()-c).trimmed();
 
@@ -765,6 +773,7 @@ Node* Parser::parseList(BlockMeta* m)
                 }
                 Node* defPara = new Node(Node::K_Paragraph);
                 defPara->pos = RowCol(defTok.lineNo, 1);
+                defPara->file = file;
                 defPara->children = parseInlineContent(defText, defTok.lineNo);
                 item->add(defPara);
             }
@@ -801,6 +810,7 @@ Node* Parser::parseList(BlockMeta* m)
 
         Node* item = new Node(Node::K_ListItem);
         item->pos = RowCol(itTok.lineNo, 1);
+        item->file = file;
         item->level = lvl;
 
         // checklist detection
@@ -826,6 +836,7 @@ Node* Parser::parseList(BlockMeta* m)
 
         Node* headPara = new Node(Node::K_Paragraph);
         headPara->pos = RowCol(itTok.lineNo, 1);
+        headPara->file = file;
         headPara->children = parseInlineContent(payload, itTok.lineNo);
         item->add(headPara);
 
@@ -855,6 +866,7 @@ QList<Node*> Parser::readCells(const LineTok& rowTok)
             continue;  // skip leading empty before first |
         Node* cell = new Node(Node::K_TableCell);
         cell->pos = RowCol(rowTok.lineNo, 1);
+        cell->file = file;
         cell->children = parseInlineContent(parts[i], rowTok.lineNo);
         cells.append(cell);
     }
@@ -883,6 +895,7 @@ Node* Parser::parseTable(BlockMeta* m)
 
     Node* t = new Node(Node::K_Table);
     t->pos = RowCol(open.lineNo, 1);
+    t->file = file;
     t->meta = m;
 
     // collect all cells into a flat list; track first blank-line position
@@ -936,6 +949,7 @@ Node* Parser::parseTable(BlockMeta* m)
     for( int r = 0; r < nRows; ++r) {
         Node* row = new Node(Node::K_TableRow);
         row->pos = allCells[off]->pos;
+        row->file = file;
         for( int c = 0; c < nCols && off < allCells.size(); ++c)
             row->add(allCells[off++]);
         t->add(row);
@@ -956,6 +970,7 @@ Node* Parser::parseBlockMacro(BlockMeta* m)
 
     Node* n = new Node(Node::K_BlockMacro);
     n->pos = RowCol(t.lineNo, 1);
+    n->file = file;
     n->meta = m;
     n->name = s.left(p);
     n->target = s.mid(p+2);
@@ -970,6 +985,7 @@ Node* Parser::parseDirective(BlockMeta* m)
 
     Node* n = new Node(Node::K_Directive);
     n->pos = RowCol(t.lineNo, 1);
+    n->file = file;
     n->meta = m;
     n->name = s.left(p);
     n->text = s.mid(p+2);
@@ -988,6 +1004,7 @@ Node* Parser::parseDirective(BlockMeta* m)
                     int ep = ds.indexOf("::");
                     Node* endNode = new Node(Node::K_Directive);
                     endNode->pos = RowCol(endTok.lineNo, 1);
+                    endNode->file = file;
                     endNode->name = ds.left(ep);
                     endNode->text = ds.mid(ep+2);
                     n->add(endNode);
@@ -1012,6 +1029,7 @@ Node* Parser::parseBreakOrComment(BlockMeta* m)
         LineTok t = take();
         Node* c = new Node(Node::K_LineComment);
         c->pos = RowCol(t.lineNo, 1);
+        c->file = file;
         c->meta = m;
         c->text = t.raw.trimmed().mid(2);
         return c;
@@ -1020,6 +1038,7 @@ Node* Parser::parseBreakOrComment(BlockMeta* m)
         LineTok t = take();
         Node* b = new Node(Node::K_ThematicBreak);
         b->pos = RowCol(t.lineNo, 1);
+        b->file = file;
         b->meta = m;
         return b;
     }
@@ -1027,6 +1046,7 @@ Node* Parser::parseBreakOrComment(BlockMeta* m)
         LineTok t = take();
         Node* pb = new Node(Node::K_PageBreak);
         pb->pos = RowCol(t.lineNo, 1);
+        pb->file = file;
         pb->meta = m;
         return pb;
     }
@@ -1045,6 +1065,7 @@ void Parser::pushText(QList<Node*>& out, const QString& t, int lineNo)
         return;
     Node* n = new Node(Node::K_Text);
     n->pos = RowCol(lineNo, 1);
+    n->file = file;
     n->text = t;
     out.append(n);
 }
@@ -1073,6 +1094,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
             pushText(out, acc, lineNo); acc.clear();
             Node* br = new Node(Node::K_LineBreak);
             br->pos = RowCol(lineNo, 1);
+            br->file = file;
             out.append(br);
             ++i;
             continue;
@@ -1085,6 +1107,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 pushText(out, acc, lineNo); acc.clear();
                 Node* ar = new Node(Node::K_AttrRef);
                 ar->pos = RowCol(lineNo, 1);
+                ar->file = file;
                 ar->name = s.mid(i+1, j-(i+1));
                 out.append(ar);
                 i = j + 1;
@@ -1099,6 +1122,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 pushText(out, acc, lineNo); acc.clear();
                 Node* xr = new Node(Node::K_Xref);
                 xr->pos = RowCol(lineNo, 1);
+                xr->file = file;
                 const QString inner = s.mid(i+2, j-(i+2));
                 int comma = inner.indexOf(',');
                 if( comma < 0)
@@ -1120,6 +1144,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 pushText(out, acc, lineNo); acc.clear();
                 Node* an = new Node(Node::K_AnchorInline);
                 an->pos = RowCol(lineNo, 1);
+                an->file = file;
                 an->name = s.mid(i+3, j-(i+3));
                 out.append(an);
                 i = j + 3;
@@ -1134,6 +1159,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 pushText(out, acc, lineNo); acc.clear();
                 Node* an = new Node(Node::K_AnchorInline);
                 an->pos = RowCol(lineNo, 1);
+                an->file = file;
                 an->name = s.mid(i+2, j-(i+2));
                 out.append(an);
                 i = j + 2;
@@ -1149,6 +1175,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 ++j;
             Node* lk = new Node(Node::K_Link);
             lk->pos = RowCol(lineNo, 1);
+            lk->file = file;
             lk->target = s.mid(i, j-i);
             // URL[text]
             if( j < s.size() && s[j] == '[') {
@@ -1179,6 +1206,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                             pushText(out, acc, lineNo); acc.clear();
                             Node* mn = new Node(Node::K_InlineMacro);
                             mn->pos = RowCol(lineNo, 1);
+                            mn->file = file;
                             mn->name = macroName;
                             mn->target = s.mid(colon+1, lb-(colon+1));
                             const QString inner = s.mid(lb+1, rb-(lb+1));
@@ -1209,6 +1237,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                         pushText(out, acc, lineNo); acc.clear();
                         Node* n = new Node(dl.kind);
                         n->pos = RowCol(lineNo, 1);
+                        n->file = file;
                         const QString inner = s.mid(i + dl.openLen, j - (i + dl.openLen));
                         if( dl.recurse)
                             n->children = parseInlineContentRec(inner, lineNo, depth+1);

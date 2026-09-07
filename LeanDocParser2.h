@@ -30,13 +30,16 @@ namespace LeanDoc {
 
 class Parser {
 public:
-    Node* parse(const QString& input);
+    Parser():file(0) {}
+
+    Node* parse(const QString& input, const QString &path);
 
     struct Error {
         RowCol pos;
+        quint16 file;
         QString message;
         Error(){}
-        Error(const QString& m, int l, int c=1):pos(l,c),message(m){}
+        Error(const QString& m, quint16 f, int l, int c):pos(l,c),file(f),message(m){}
     };
     QList<Error> errors;
 
@@ -73,6 +76,7 @@ private:
     void warnNearMissDelimiter(const QString& s, int lineNo);
 
     Lexer dlex;
+    quint16 file;
 };
 
 } // namespace LeanDoc

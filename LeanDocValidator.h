@@ -29,11 +29,12 @@ namespace LeanDoc {
 
 struct Diagnostic {
     enum Level { Warning, Error };
-    Level level;
+    quint8 level;
+    quint16 file;
     int line;
     QString message;
-    Diagnostic():level(Warning),line(0){}
-    Diagnostic(Level lv, int l, const QString& m):level(lv),line(l),message(m){}
+    Diagnostic():level(Warning),file(0),line(0){}
+    Diagnostic(Level lv, quint16 f, int l, const QString& m):level(lv),file(f),line(l),message(m){}
 };
 
 class Validator {
@@ -56,8 +57,8 @@ private:
     void checkTableCellCount(const Node* n);
     void checkAdmonitionAttrContext(const Node* n);
 
-    void warn(int line, const QString& msg);
-    void error(int line, const QString& msg);
+    void warn(quint16 file, int line, const QString& msg);
+    void error(quint16 file, int line, const QString& msg);
 
     QSet<QString> danchors; // declared anchor IDs
     QMap<QString, int> danchorLines; // anchor ID -> first occurrence line

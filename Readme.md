@@ -34,7 +34,7 @@ While I'm aware of the AsciiDoc specification effort, I think that the issues ar
 I decided for a number of deliberate language changes to make it leaner, remove ambiguity and reduce context sensitivity. As a side-effect, the result is also
 much easier to specify.
 
-Here are some of the differences to AsciiDoc. For more information see [the specification](./documentation/The_LeanDoc_Language_Specification.md).
+Here are some of the differences to AsciiDoc. For more information see [the specification](./documentation/The_LeanDoc_Language_Specification.adoc).
 
 #### Fixed delimiter regularity
 

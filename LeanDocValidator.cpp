@@ -73,14 +73,15 @@ void Validator::collectAnchors(const Node* n)
     if( n->meta && !n->meta->anchorId.isEmpty()) {
         const QString& id = n->meta->anchorId;
         const int line = n->meta->pos.row;
+        const quint16 file = n->file;
 
         if( !isValidIdentifier(id))
-            error(line, "invalid anchor ID '[[" + id +
+            error(file, line, "invalid anchor ID '[[" + id +
                   "]]'; must match IDENTIFIER (start with letter/underscore, "
                   "then letters/digits/underscore/hyphen)");
 
         if( danchors.contains(id))
-            error(line, "duplicate anchor ID '[[" + id +
+            error(file, line, "duplicate anchor ID '[[" + id +
                   "]]' (first declared at line " +
                   QString::number(danchorLines.value(id)) + ")");
         else {
@@ -93,13 +94,14 @@ void Validator::collectAnchors(const Node* n)
     if( n->kind == Node::K_AnchorInline && !n->name.isEmpty()) {
         const QString& id = n->name;
         const int line = n->pos.row;
+        const quint16 file = n->file;
 
         if( !isValidIdentifier(id))
-            error(line, "invalid inline anchor ID '" + id +
+            error(file, line, "invalid inline anchor ID '" + id +
                   "'; must match IDENTIFIER");
 
         if( danchors.contains(id))
-            error(line, "duplicate anchor ID '" + id +
+            error(file, line, "duplicate anchor ID '" + id +
                   "' (first declared at line " +
                   QString::number(danchorLines.value(id)) + ")");
         else {
@@ -240,11 +242,11 @@ void Validator::checkTableAttrs(const Node* n)
         const QString& key = it.key();
 
         if( key == "width") {
-            error(n->pos.row, "unsupported table attribute 'width'; "
+            error(n->file, n->pos.row, "unsupported table attribute 'width'; "
                   "table width is determined by the rendering backend");
         } else if( key == "cols") {
             if( !isValidColSpec(it.value()))
-                error(n->pos.row, "invalid 'cols' format '" + it.value() +
+                error(n->file, n->pos.row, "invalid 'cols' format '" + it.value() +
                       "'; expected relative widths (e.g. \"1,2,3\") "
                       "or alignment (e.g. \"<,^,>\")");
         } else if( key == "options") {
@@ -256,14 +258,14 @@ void Validator::checkTableAttrs(const Node* n)
             for( int i = 0; i < opts.size(); ++i) {
                 const QString opt = opts[i].trimmed();
                 if( !opt.isEmpty() && !isKnownTableOption(opt))
-                    error(n->pos.row, "unknown table option '" + opt + "'");
+                    error(n->file, n->pos.row, "unknown table option '" + opt + "'");
             }
         } else if( key.startsWith("positional")) {
             // positional args: first is typically a block role; ignore for tables
         } else if( key == "id" || key == "role") {
             // valid general attributes
         } else {
-            error(n->pos.row, "unknown table attribute '" + key + "'");
+            error(n->file, n->pos.row, "unknown table attribute '" + key + "'");
         }
     }
 }
@@ -285,7 +287,7 @@ void Validator::checkTableCellCount(const Node* n)
             continue;
         const int rowCols = row->children.size();
         if( rowCols != specCols)
-            error(row->pos.row, "table row has " + QString::number(rowCols) +
+            error(n->file, row->pos.row, "table row has " + QString::number(rowCols) +
                   " cells but cols attribute specifies " +
                   QString::number(specCols) + " columns");
     }
@@ -313,17 +315,17 @@ void Validator::checkBlockAttrs(const Node* n)
             continue;
 
         if( key == "cols") {
-            error(n->pos.row, "'cols' attribute is only valid on table blocks");
+            error(n->file, n->pos.row, "'cols' attribute is only valid on table blocks");
             continue;
         }
 
         // presentation-only attributes not supported in LeanDoc
         if( key == "width" || key == "height") {
-            error(n->pos.row, "unsupported presentation attribute '" + key + "'");
+            error(n->file, n->pos.row, "unsupported presentation attribute '" + key + "'");
             continue;
         }
 
-        warn(n->pos.row, "unknown attribute '" + key + "' on " +
+        warn(n->file, n->pos.row, "unknown attribute '" + key + "' on " +
              QString(n->nodeKindName()) + " block");
     }
 }
@@ -354,7 +356,7 @@ void Validator::checkSourceAttrContext(const Node* n)
 
     // only listing (----) and open (--) blocks are valid targets
     if( n->delimKind != Node::DK_Listing && n->delimKind != Node::DK_Open)
-        error(n->pos.row, "[source] attribute is only valid on listing (----) "
+        error(n->file, n->pos.row, "[source] attribute is only valid on listing (----) "
               "or open (--) blocks");
 }
 
@@ -377,7 +379,7 @@ void Validator::checkAdmonitionAttrContext(const Node* n)
                 // admonition as block attribute is valid only on open (--) or example (====) blocks
                 if( n->kind != Node::K_DelimitedBlock ||
                     (n->delimKind != Node::DK_Open && n->delimKind != Node::DK_Example))
-                    error(n->pos.row, "[" + v + "] attribute is only valid on "
+                    error(n->file, n->pos.row, "[" + v + "] attribute is only valid on "
                           "open (--) or example (====) delimited blocks");
                 break;
             }
@@ -424,19 +426,19 @@ void Validator::checkRoleContext(const Node* n)
             if( isRoleAttr)
                 continue; // [role="..."] custom CSS roles remain open
             if( !isSectionRole(role)) {
-                error(n->pos.row, "unknown section role '" + role +
+                error(n->file, n->pos.row, "unknown section role '" + role +
                       "'; valid roles are part, bibliography, glossary, "
                       "index, abstract, appendix, discrete");
                 continue;
             }
             if( role == "part" && n->level != 2) // '==' sections carry level 2
-                error(n->pos.row, "[part] is only valid on level-1 (==) sections");
+                error(n->file, n->pos.row, "[part] is only valid on level-1 (==) sections");
         } else {
             // section roles applied outside a section are errors
             if( isSectionRole(role))
-                error(n->pos.row, "role '" + role + "' is only valid on section blocks");
+                error(n->file, n->pos.row, "role '" + role + "' is only valid on section blocks");
             else if( isStyle && !isKnownBlockStyle(role) && n->kind != Node::K_Table)
-                error(n->pos.row, "unknown block style '" + role + "'");
+                error(n->file, n->pos.row, "unknown block style '" + role + "'");
         }
     }
 }
@@ -444,6 +446,7 @@ void Validator::checkRoleContext(const Node* n)
 void Validator::checkDocAttrs(const Node* doc)
 {
     const int line = doc->pos.row;
+    const quint16 file = doc->file;
     QMap<QString,QString>::ConstIterator it = doc->kv.constBegin();
     for( ; it != doc->kv.constEnd(); ++it) {
         if( !it.key().startsWith("attr:"))
@@ -454,21 +457,21 @@ void Validator::checkDocAttrs(const Node* doc)
         if( name == "toc") {
             if( !val.isEmpty() && val != "auto" && val != "preamble" &&
                 val != "left" && val != "right")
-                error(line, "invalid ':toc:' value '" + val +
+                error(file, line, "invalid ':toc:' value '" + val +
                       "'; expected auto, preamble, left or right");
         } else if( name == "toclevels") {
             bool ok = false;
             const int lv = val.toInt(&ok);
             if( !ok || lv < 1 || lv > 5)
-                error(line, "invalid ':toclevels:' value '" + val +
+                error(file, line, "invalid ':toclevels:' value '" + val +
                       "'; expected a number from 1 to 5");
         } else if( name == "xrefstyle") {
             if( val != "short" && val != "full" && val != "basic")
-                error(line, "invalid ':xrefstyle:' value '" + val +
+                error(file, line, "invalid ':xrefstyle:' value '" + val +
                       "'; expected short, full or basic");
         } else if( name == "sectnums" || name == "numbered") {
             if( !val.isEmpty())
-                error(line, "':" + name + ":' takes no value");
+                error(file, line, "':" + name + ":' takes no value");
         }
         // any other attribute is a user attribute (open vocabulary)
     }
@@ -480,7 +483,7 @@ void Validator::checkColsOnNonTable(const Node* n)
         return;
     // warn about cols attribute on non-table blocks
     if( n->meta->attrs.contains("cols"))
-        error(n->pos.row, "'cols' attribute is only valid on table blocks");
+        error(n->file, n->pos.row, "'cols' attribute is only valid on table blocks");
 }
 
 void Validator::checkXref(const Node* n)
@@ -491,22 +494,22 @@ void Validator::checkXref(const Node* n)
     if( danchors.contains(id))
         return;
     if( dambiguousAutoAnchors.contains(id)) {
-        warn(n->pos.row, "ambiguous cross-reference '<<" + id +
+        warn(n->file, n->pos.row, "ambiguous cross-reference '<<" + id +
              ">>': several section titles derive this anchor ID; "
              "add an explicit [[" + id + "]] anchor");
         return;
     }
     if( dautoAnchors.contains(id))
         return;
-    warn(n->pos.row, "unresolved cross-reference '<<" + id + ">>'");
+    warn(n->file, n->pos.row, "unresolved cross-reference '<<" + id + ">>'");
 }
 
-void Validator::warn(int line, const QString& msg)
+void Validator::warn(quint16 file, int line, const QString& msg)
 {
-    diagnostics.append(Diagnostic(Diagnostic::Warning, line, msg));
+    diagnostics.append(Diagnostic(Diagnostic::Warning, file, line, msg));
 }
 
-void Validator::error(int line, const QString& msg)
+void Validator::error(quint16 file, int line, const QString& msg)
 {
-    diagnostics.append(Diagnostic(Diagnostic::Error, line, msg));
+    diagnostics.append(Diagnostic(Diagnostic::Error, file, line, msg));
 }

@@ -58,6 +58,14 @@ static bool writeFileUtf8(const QString& path, const QString& text, QString* out
     return true;
 }
 
+static QString fileName(quint16 file)
+{
+    QString res = Node::fileName(file);
+    if( res.isEmpty() )
+        return QString();
+    return QFileInfo(res).fileName() + " ";
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
@@ -128,13 +136,13 @@ int main(int argc, char** argv)
         }
 
         Parser parser;
-        Node* doc = parser.parse(text);
+        Node* doc = parser.parse(text, inPath);
         if (!doc) {
             err << "Parse failed (null result)\n";
             return 1;
         }
         for (int i = 0; i < parser.errors.size(); ++i)
-            err << "Error at line " << parser.errors[i].pos.row << ": " << parser.errors[i].message << "\n";
+            err << "Error at " << fileName(parser.errors[i].file) << "line " << parser.errors[i].pos.row << ": " << parser.errors[i].message << "\n";
 
         Preprocessor checkPre;
         checkPre.setBaseDir(QFileInfo(inPath).absolutePath());
@@ -150,7 +158,7 @@ int main(int argc, char** argv)
             if (d.level == Diagnostic::Error)
                 ++valErrors;
             err << (d.level == Diagnostic::Error ? "Error" : "Warning")
-                << " at line " << d.line << ": " << d.message << "\n";
+                << " at " << fileName(d.file) << "line " << d.line << ": " << d.message << "\n";
         }
         Node::deleteTree(doc);
 
@@ -181,14 +189,14 @@ int main(int argc, char** argv)
     }
 
     Parser parser;
-    Node* doc = parser.parse(text);
+    Node* doc = parser.parse(text, inPath);
     if (!doc) {
         err << "Parse failed (null result)\n";
         return 1;
     }
 
     for (int i = 0; i < parser.errors.size(); ++i)
-        err << "Error at line " << parser.errors[i].pos.row << ": " << parser.errors[i].message << "\n";
+        err << "Error at " << fileName(parser.errors[i].file) << "line " << parser.errors[i].pos.row << ": " << parser.errors[i].message << "\n";
 
     Preprocessor preproc;
     preproc.setBaseDir(QFileInfo(inPath).absolutePath());
@@ -202,7 +210,7 @@ int main(int argc, char** argv)
     for (int i = 0; i < validator.diagnostics.size(); ++i) {
         const Diagnostic& d = validator.diagnostics[i];
         err << (d.level == Diagnostic::Error ? "Error" : "Warning")
-            << " at line " << d.line << ": " << d.message << "\n";
+            << " at " << fileName(d.file) << "line " << d.line << ": " << d.message << "\n";
     }
 
     const bool hasErrors = !(parser.errors.isEmpty() && validator.diagnostics.isEmpty() && preproc.errors.isEmpty());

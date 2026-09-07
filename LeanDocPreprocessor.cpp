@@ -250,7 +250,7 @@ bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
     // parse included content
     dincludeStack.insert(canonical);
     Parser parser;
-    Node* subdoc = parser.parse(content);
+    Node* subdoc = parser.parse(content, absPath);
     dincludeStack.remove(canonical);
 
     if( !subdoc) {
