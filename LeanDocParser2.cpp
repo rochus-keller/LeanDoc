@@ -63,6 +63,17 @@ static bool isValidIdentifier(const QString& s)
     return true;
 }
 
+static void splitAnchor(const QString& inner, Node* an)
+{
+    const int comma = inner.indexOf(',');
+    if( comma < 0 )
+        an->name = inner.trimmed();
+    else {
+        an->name = inner.left(comma).trimmed();
+        an->text = inner.mid(comma+1).trimmed();
+    }
+}
+
 static int sectionLevel(const QString& raw) {
     const QString s = raw.trimmed();
     int n = 0;
@@ -1137,22 +1148,22 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
             }
         }
 
-        // bibliography anchor [[[id]]] (must check before [[id]])
+        // bibliography anchor [[[id,reftext]]] (must check before [[id]])
         if( matchAt(s, i, "[[[", 3)) {
             int j = findDelim(s, i+3, "]]]", 3);
             if( j > i+3) {
                 pushText(out, acc, lineNo); acc.clear();
-                Node* an = new Node(Node::K_AnchorInline);
+                Node* an = new Node(Node::K_BiblioAnchor);
                 an->pos = RowCol(lineNo, 1);
                 an->file = file;
-                an->name = s.mid(i+3, j-(i+3));
+                splitAnchor(s.mid(i+3, j-(i+3)), an);
                 out.append(an);
                 i = j + 3;
                 continue;
             }
         }
 
-        // inline anchor [[id]]
+        // inline anchor [[id,reftext]]
         if( matchAt(s, i, "[[", 2)) {
             int j = findDelim(s, i+2, "]]", 2);
             if( j > i+2) {
@@ -1160,7 +1171,7 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                 Node* an = new Node(Node::K_AnchorInline);
                 an->pos = RowCol(lineNo, 1);
                 an->file = file;
-                an->name = s.mid(i+2, j-(i+2));
+                splitAnchor(s.mid(i+2, j-(i+2)), an);
                 out.append(an);
                 i = j + 2;
                 continue;

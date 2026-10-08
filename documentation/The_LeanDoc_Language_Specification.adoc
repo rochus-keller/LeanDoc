@@ -12,7 +12,7 @@
 
 === Version
 
-2026-08-19, work in progress
+2026-10-08, work in progress
 
 === Author
 
@@ -662,7 +662,7 @@ InlineElement = Bold | Italic | Monospace
               | Superscript | Subscript | Highlight
               | CustomRole
               | Link | Image
-              | InlineAnchor | CrossReference
+              | InlineAnchor | BiblioAnchor | CrossReference
               | AttributeReference
               | InlineMacro | LatexMath
               | IndexTerm
@@ -763,6 +763,8 @@ EmailLink   = IDENTIFIER "@" IDENTIFIER ( "." IDENTIFIER )+ ;
 InlineAnchor   = "[[" IDENTIFIER [ "," InlineContent ] "]]"
                | "[" "#" IDENTIFIER "]" ;
 
+BiblioAnchor   = "[[[" IDENTIFIER [ "," InlineContent ] "]]]" ;
+
 CrossReference = "<<" IDENTIFIER [ "," InlineContent ] ">>"
                | "xref:" IDENTIFIER "[" [ InlineContent ] "]" ;
 ....
@@ -807,12 +809,18 @@ The text rendered for a bare `\<<id>>` reference is controlled by the
 * `basic` -- the target's title only, e.g. "Types"
 
 A per-anchor override is available through the anchor's reference text:
-the optional second argument of a block anchor (`\[[id, reference text]]`)
-or the `reftext` attribute on the block metadata line
-(`[reftext="chapter 3"]`). When present, the reference text is rendered
+the optional second argument of a block or inline anchor
+(`\[[id, reference text]]`), the optional second argument of a
+bibliography anchor (see <<special-sections>>), or the `reftext`
+attribute on the block metadata line (`[reftext="chapter 3"]`). When present, the reference text is rendered
 verbatim for every bare `\<<id>>` pointing at that anchor, regardless
 of `:xrefstyle:`. Explicit display text (`\<<id, display text>>`)
 always takes precedence over both.
+
+The reference text may contain spaces, but the ID may not: IDs must
+match IDENTIFIER because they are passed through to output formats
+(HTML and XML IDs, Typst labels) which do not permit spaces. Write
+`\[[delta-1974, DELTA 1974]]` rather than an ID with a space.
 
 NOTE: This matches Asciidoctor's `xrefstyle` attribute and `reftext`
 override, except that LeanDoc's default is `short` rather than `full`.
@@ -1138,6 +1146,46 @@ Attributes can be set in the document header or anywhere in the body.
 An attribute can be unset by omitting the value: `:name:` defines the
 attribute (useful for `ifdef` tests), while `:name!:` unsets it.
 
+==== Built-in Character Attributes
+
+The following attributes are predefined, as in AsciiDoc. A document
+may redefine them.
+
+[options="header"]
+|===
+|Attribute |Value |Use
+
+|`nbsp`
+|no-break space (U+00A0)
+|keeps two words on the same line
+
+|`zwsp`
+|zero-width space (U+200B)
+|allows a line break without a visible space
+
+|`wj`
+|word joiner (U+2060)
+|forbids a line break without adding space
+
+|`sp`
+|a single space
+|
+
+|`empty`, `blank`
+|empty text
+|
+|===
+
+For example, the following never breaks between the two words:
+
+....
+Simula{nbsp}I
+....
+
+The other character replacement attributes of AsciiDoc (`lt`, `amp`,
+`plus` and so on) are not predefined; use the backslash escape (see
+<<escape-mechanism>>) instead.
+
 ==== Behavioral Document Attributes
 
 A fixed set of document attributes controls processing and rendering
@@ -1223,10 +1271,16 @@ Special sections are normal sections with a semantic role attribute:
 
 * [[[taoup]]] Eric S. Raymond. The Art of Unix Programming.
   Addison-Wesley, 2003.
-* [[[gof]]] Gamma et al. Design Patterns. Addison-Wesley, 1994.
+* [[[gof,GoF 1994]]] Gamma et al. Design Patterns. Addison-Wesley, 1994.
 
-In text: See <<taoup>> for details.
+In text: See <<taoup>> and <<gof>> for details.
 ....
+
+Each entry starts with a bibliography anchor, optionally followed by
+reference text after a comma. The entry is labeled with the reference
+text in brackets, or with the ID if there is none (`[taoup]` and
+`[GoF 1994]` above). A bare cross-reference to the entry renders the
+same text without brackets.
 
 The following roles are supported:
 
@@ -1868,6 +1922,10 @@ how.
 |Attribute reference (`{attr}`)
 |Identical
 |
+
+|Character replacement attributes
+|`nbsp`, `zwsp`, `wj`, `sp`, `empty`, `blank` only
+|Use the backslash escape for the others
 
 |Counter attributes
 |Not supported

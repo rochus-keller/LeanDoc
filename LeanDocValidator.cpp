@@ -90,8 +90,8 @@ void Validator::collectAnchors(const Node* n)
         }
     }
 
-    // inline anchor (stored in name field)
-    if( n->kind == Node::K_AnchorInline && !n->name.isEmpty()) {
+    if( (n->kind == Node::K_AnchorInline || n->kind == Node::K_BiblioAnchor) &&
+            !n->name.isEmpty()) {
         const QString& id = n->name;
         const int line = n->pos.row;
         const quint16 file = n->file;

@@ -55,7 +55,7 @@ QString TypstGenerator::escText(const QString& s)
     for( int i=0;i<s.size();++i ) {
         const QChar c = s[i];
         if( c == '\\' || c == '*' || c == '_' || c == '`' || c == '#' ||
-            c == '[' || c == ']' || c == '<' || c == '>' || c == '@' ) {
+            c == '[' || c == ']' || c == '<' || c == '>' || c == '@' || c == '~' ) {
             r += '\\';
         }
         r += c;
@@ -161,6 +161,12 @@ void TypstGenerator::collectRefTargets(const Node* n)
             dambiguousAutoLabels.insert(n->meta->anchorId);
         }
         drefTargets.insert(n->meta->anchorId, t);
+    }
+    if( (n->kind == Node::K_AnchorInline || n->kind == Node::K_BiblioAnchor) &&
+            !n->name.isEmpty()) {
+        RefTarget t;
+        t.text = n->text;
+        drefTargets.insert(n->name, t);
     }
     for( int i = 0; i < n->children.size(); ++i)
         collectRefTargets(n->children[i]);
@@ -778,6 +784,11 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
 
     case Node::K_AnchorInline:
         out << "#metadata(none) <" << n->name << ">";
+        return true;
+
+    case Node::K_BiblioAnchor:
+        out << "#metadata(none) <" << n->name << ">"
+            << escText("[" + (n->text.isEmpty() ? n->name : n->text) + "]");
         return true;
 
     case Node::K_AttrRef:

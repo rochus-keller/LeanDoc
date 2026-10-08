@@ -102,6 +102,8 @@ const char* Node::nodeKindName(quint8 k)
         return "ImageInline";
     case K_AnchorInline:
         return "AnchorInline";
+    case K_BiblioAnchor:
+        return "BiblioAnchor";
     case K_Xref:
         return "Xref";
     case K_AttrRef:

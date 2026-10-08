@@ -80,6 +80,7 @@ public:
         K_Link,
         K_ImageInline,
         K_AnchorInline,
+        K_BiblioAnchor,
         K_Xref,
         K_AttrRef,
         K_InlineMacro,

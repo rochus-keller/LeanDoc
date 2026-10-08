@@ -42,6 +42,17 @@ bool Preprocessor::process(Node* doc)
 
 void Preprocessor::collectDocAttrs(Node* doc)
 {
+    // AsciiDoc built-in character attributes; the document may redefine them
+    static const char* const builtins[][2] = {
+        { "nbsp", "\xC2\xA0" }, { "zwsp", "\xE2\x80\x8B" }, { "wj", "\xE2\x81\xA0" },
+        { "sp", " " }, { "empty", "" }, { "blank", "" }
+    };
+    for( int i = 0; i < int(sizeof(builtins) / sizeof(builtins[0])); ++i) {
+        const QString name = QString::fromLatin1(builtins[i][0]);
+        if( !dattrs.contains(name))
+            dattrs.insert(name, QString::fromUtf8(builtins[i][1]));
+    }
+
     // merge document attributes (:name: value) from doc->kv into dattrs
     QMap<QString,QString>::ConstIterator it = doc->kv.constBegin();
     for( ; it != doc->kv.constEnd(); ++it) {
