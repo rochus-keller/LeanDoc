@@ -301,9 +301,10 @@ QMap<QString, QString> Parser::parseAttrList(const QString& bracketed, int lineN
     return res;
 }
 
-Node* Parser::parse(const QString& input, const QString& path)
+Node* Parser::parse(const QString& input, const QString& path, bool fragment)
 {
     errors.clear();
+    dfragment = fragment;
     dlex.setInput(input);
     file = Node::fileId(path);
     return parseDocument();
@@ -316,15 +317,21 @@ Node* Parser::parseDocument()
     doc->file = file;
 
     // skip leading comments and blanks before header
-    while( la(0).kind == LineTok::T_BLANK || la(0).kind == LineTok::T_LINE_COMMENT) {
+    while( la(0).kind == LineTok::T_BLANK ||
+           la(0).kind == LineTok::T_LINE_COMMENT ||
+           la(0).kind == LineTok::T_DELIM_COMMENT) {
         if( la(0).kind == LineTok::T_LINE_COMMENT) {
             Node* c = new Node(Node::K_LineComment);
             c->pos = RowCol(la(0).lineNo, 1);
             c->file = file;
             c->text = la(0).raw.trimmed().mid(2);
             doc->add(c);
+            take();
+        } else if( la(0).kind == LineTok::T_DELIM_COMMENT) {
+            doc->add(parseDelimited(0));
+        } else {
+            take();
         }
-        take();
     }
     parseDocumentHeader(doc);
     skipBlankLines();
@@ -365,14 +372,14 @@ void Parser::parseDocumentHeader(Node* doc)
 {
     // document title: = Title (level 1)
     bool hadTitle = false;
-    if( la(0).kind == LineTok::T_SECTION && sectionLevel(la(0).raw) == 1) {
+    if( !dfragment && la(0).kind == LineTok::T_SECTION && sectionLevel(la(0).raw) == 1) {
         LineTok t = take();
         doc->kv.insert("title", sectionTitle(t.raw));
         hadTitle = true;
     }
 
     // author and revision lines only exist when a title precedes them
-    if( hadTitle) {
+    if( hadTitle && !dfragment) {
         // author line: Name [<email>]  (email optional per spec)
         if( la(0).kind == LineTok::T_TEXT) {
             const QString s = la(0).raw.trimmed();

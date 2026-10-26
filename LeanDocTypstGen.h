@@ -51,6 +51,7 @@ public:
 
 private:
     bool emitPreamble(const Node* doc, QTextStream& out, TypstGenError* err);
+    void emitToc(const Node* doc, QTextStream& out);
     bool emitNode(const Node* n, QTextStream& out, TypstGenError* err, int headingShift);
 
     bool emitSection(const Node* n, QTextStream& out, TypstGenError* err, int headingShift);

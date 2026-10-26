@@ -30,9 +30,9 @@ namespace LeanDoc {
 
 class Parser {
 public:
-    Parser():file(0) {}
+    Parser():file(0),dfragment(false) {}
 
-    Node* parse(const QString& input, const QString &path);
+    Node* parse(const QString& input, const QString& path, bool fragment = false);
 
     struct Error {
         RowCol pos;
@@ -77,6 +77,7 @@ private:
 
     Lexer dlex;
     quint16 file;
+    bool dfragment;
 };
 
 } // namespace LeanDoc

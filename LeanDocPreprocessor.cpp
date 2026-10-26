@@ -35,6 +35,7 @@ bool Preprocessor::process(Node* doc)
     if( !doc || doc->kind != Node::K_Document)
         return false;
     errors.clear();
+    dlevelShift = 0;
     collectDocAttrs(doc);
     processChildren(doc, 0);
     return true;
@@ -71,9 +72,8 @@ void Preprocessor::processChildren(Node* parent, int depth)
         if( !child) { ++i; continue; }
 
         if( child->kind == Node::K_BlockMacro && child->name == "include") {
-            if( resolveInclude(parent, i, depth))
-                continue; // index stays same, re-check replaced nodes
-            ++i;
+            const int n = resolveInclude(parent, i, depth);
+            i += n < 0 ? 1 : n;
         } else if( child->kind == Node::K_Directive &&
                    (child->name == "ifdef" || child->name == "ifndef")) {
             if( evaluateConditional(parent, i))
@@ -161,16 +161,20 @@ void Preprocessor::checkIncludeAttrs(const QMap<QString,QString>& attrs, int lin
     }
 }
 
-int Preprocessor::parseLevelOffset(const QString& raw, bool* ok)
+int Preprocessor::parseLevelOffset(const QString& raw, bool* ok, bool* absolute)
 {
     QString s = raw.trimmed();
     if( ok) *ok = false;
+    if( absolute) *absolute = false;
     if( s.isEmpty())
         return 0;
     int sign = 1;
-    if( s.startsWith('+'))
+    bool hasSign = false;
+    if( s.startsWith('+')) {
+        hasSign = true;
         s = s.mid(1);
-    else if( s.startsWith('-')) {
+    } else if( s.startsWith('-')) {
+        hasSign = true;
         sign = -1;
         s = s.mid(1);
     }
@@ -179,6 +183,7 @@ int Preprocessor::parseLevelOffset(const QString& raw, bool* ok)
     if( !numOk)
         return 0;
     if( ok) *ok = true;
+    if( absolute) *absolute = !hasSign;
     return sign * n;
 }
 
@@ -200,13 +205,13 @@ static void applyLevelOffset(QList<Node*>& nodes, int off)
     }
 }
 
-bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
+int Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
 {
     Node* inc = parent->children[childIdx];
     if( depth >= dmaxIncludeDepth) {
         error(inc->pos.row, "include:: depth limit exceeded (max " +
               QString::number(dmaxIncludeDepth) + ")");
-        return false;
+        return -1;
     }
 
     // parse target: "path[attrs]"
@@ -233,7 +238,7 @@ bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
         canonical = absPath;
     if( dincludeStack.contains(canonical)) {
         error(inc->pos.row, "circular include detected: " + path);
-        return false;
+        return -1;
     }
 
     QString content = readFile(absPath);
@@ -242,7 +247,7 @@ bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
         // remove the include node, continue
         parent->children.removeAt(childIdx);
         Node::deleteTree(inc);
-        return true;
+        return 0;
     }
 
     const QMap<QString,QString> incAttrs = parseIncludeAttrs(attrsStr);
@@ -261,14 +266,14 @@ bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
     // parse included content
     dincludeStack.insert(canonical);
     Parser parser;
-    Node* subdoc = parser.parse(content, absPath);
-    dincludeStack.remove(canonical);
+    Node* subdoc = parser.parse(content, absPath, true);
 
     if( !subdoc) {
+        dincludeStack.remove(canonical);
         error(inc->pos.row, "failed to parse included file: " + path);
         parent->children.removeAt(childIdx);
         Node::deleteTree(inc);
-        return true;
+        return 0;
     }
 
     for( int i = 0; i < parser.errors.size(); ++i)
@@ -276,33 +281,39 @@ bool Preprocessor::resolveInclude(Node* parent, int childIdx, int depth)
               QString::number(parser.errors[i].pos.row) + "] " +
               parser.errors[i].message);
 
+    QList<Node*> included = subdoc->children;
+    bool absolute = false;
+    int effectiveShift = dlevelShift;
+    if( incAttrs.contains("leveloffset")) {
+        bool ok = false;
+        const int off = parseLevelOffset(incAttrs.value("leveloffset"), &ok, &absolute);
+        if( ok)
+            effectiveShift = absolute ? off : dlevelShift + off;
+    }
+    applyLevelOffset(included, effectiveShift);
+
+    QString oldBase = dbaseDir;
+    const int oldLevelShift = dlevelShift;
+    dbaseDir = QFileInfo(absPath).path();
+    dlevelShift = effectiveShift;
+    processChildren(subdoc, depth + 1);
+    dbaseDir = oldBase;
+    dlevelShift = oldLevelShift;
+    dincludeStack.remove(canonical);
+
     // splice included children into parent, replacing the include node
     parent->children.removeAt(childIdx);
     Node::deleteTree(inc);
 
-    QList<Node*> included = subdoc->children;
-    subdoc->children.clear(); // detach before deleting subdoc shell
-
-    if( incAttrs.contains("leveloffset")) {
-        bool ok = false;
-        const int off = parseLevelOffset(incAttrs.value("leveloffset"), &ok);
-        if( ok)
-            applyLevelOffset(included, off);
-    }
-
+    included = subdoc->children;
+    subdoc->children.clear();
+    const int inserted = included.size();
     for( int i = 0; i < included.size(); ++i)
         parent->children.insert(childIdx + i, included[i]);
 
-    // recursively process included content
-    QString oldBase = dbaseDir;
-    dbaseDir = QFileInfo(absPath).path();
-    for( int i = 0; i < included.size(); ++i)
-        processNode(included[i], depth + 1);
-    dbaseDir = oldBase;
-
     delete subdoc->meta;
     delete subdoc;
-    return true;
+    return inserted;
 }
 
 bool Preprocessor::evaluateConditional(Node* parent, int childIdx)
@@ -503,6 +514,8 @@ QStringList Preprocessor::toAsciidoctorCompat(const QStringList& lines)
     QString curFence;
     bool seenTitle = false;
     bool inHeader = false;   // between the document title and the first body line
+    bool headerCanHaveAuthor = false;
+    bool headerRevisionExpected = false;
     bool inBody = false;     // from the first part opener on
     bool partPending = false;
 
@@ -524,7 +537,15 @@ QStringList Preprocessor::toAsciidoctorCompat(const QStringList& lines)
         }
 
         if( inHeader) {
+            if( headerRevisionExpected) {
+                headerRevisionExpected = false;
+                if( trimmed.size() >= 2 && trimmed[0] == 'v' && trimmed[1].isDigit()) {
+                    out.append(line);
+                    continue;
+                }
+            }
             if( trimmed.startsWith(':')) {
+                headerCanHaveAuthor = false;
                 // ':numbered:'/':sectnums:'/':doctype:' are superseded by the
                 // compat attributes; everything else is kept
                 if( trimmed.startsWith(":numbered:") ||
@@ -533,6 +554,12 @@ QStringList Preprocessor::toAsciidoctorCompat(const QStringList& lines)
                     continue;
                 }
                 out.append(line);
+                continue;
+            }
+            if( headerCanHaveAuthor && !trimmed.isEmpty() && !trimmed.startsWith("//")) {
+                out.append(line);
+                headerCanHaveAuthor = false;
+                headerRevisionExpected = true;
                 continue;
             }
             // header ends at the first non-attribute line
@@ -566,6 +593,7 @@ QStringList Preprocessor::toAsciidoctorCompat(const QStringList& lines)
             if( marks == 1 && !seenTitle) {
                 seenTitle = true;
                 inHeader = true;
+                headerCanHaveAuthor = true;
                 out.append(line);
                 continue;
             }
@@ -577,8 +605,28 @@ QStringList Preprocessor::toAsciidoctorCompat(const QStringList& lines)
             }
             if( hasParts && !inBody) {
                 // front matter: the preface keeps its level and is unnumbered
-                if( marks == 2)
-                    out.append("[preface]");
+                if( marks == 2) {
+                    bool hasRole = false;
+                    for( int j = out.size() - 1; j >= 0; --j) {
+                        const QString metaLine = out[j].trimmed();
+                        if( metaLine.startsWith("[[") && metaLine.endsWith("]]")) {
+                            continue;
+                        } else if( metaLine.startsWith("[") && metaLine.endsWith("]") &&
+                                   !metaLine.startsWith("[[")) {
+                            const QString attrs = metaLine.mid(1, metaLine.size() - 2);
+                            const int comma = attrs.indexOf(',');
+                            const QString first = (comma < 0 ? attrs : attrs.left(comma)).trimmed();
+                            if( !first.isEmpty() && first.indexOf('=') < 0 && first[0].isLetter())
+                                hasRole = true;
+                            continue;
+                        } else if( metaLine.startsWith(".") && metaLine.size() > 1) {
+                            continue;
+                        }
+                        break;
+                    }
+                    if( !hasRole)
+                        out.append("[preface]");
+                }
                 out.append(line);
                 continue;
             }
@@ -630,9 +678,10 @@ QStringList Preprocessor::expandFile(const QString& absPath, const QString& attr
 
     if( incAttrs.contains("leveloffset")) {
         bool ok = false;
-        const int off = parseLevelOffset(incAttrs.value("leveloffset"), &ok);
+        bool absolute = false;
+        const int off = parseLevelOffset(incAttrs.value("leveloffset"), &ok, &absolute);
         if( ok)
-            levelShift += off;
+            levelShift = absolute ? off : levelShift + off;
     }
 
     dincludeStack.insert(canonical);

@@ -102,6 +102,21 @@ static bool hasStyle(const Node* n, const QString& style)
     return false;
 }
 
+void TypstGenerator::emitToc(const Node* doc, QTextStream& out)
+{
+    int depth = 3;
+    if( doc->kv.contains("attr:toclevels")) {
+        bool ok = false;
+        const int lv = doc->kv.value("attr:toclevels").trimmed().toInt(&ok);
+        if( ok && lv >= 1 && lv <= 5)
+            depth = lv;
+    }
+    out << "#outline(";
+    if( doc->kv.contains("attr:toc-title"))
+        out << "title: [" << TypstGenerator::escText(doc->kv.value("attr:toc-title").trimmed()) << "], ";
+    out << "depth: " << depth << ")\n#pagebreak()\n\n";
+}
+
 static QString romanNumeral(int n)
 {
     static const int vals[] =    { 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1 };
@@ -197,25 +212,32 @@ bool TypstGenerator::generate(const Node* doc, QTextStream& out, TypstGenError* 
         out << "]\n\n";
     }
 
-    // emit TOC if :toc: attribute present; :toc: left/right are HTML hints,
-    // paged output always places the TOC as front matter
-    if( doc->kv.contains("attr:toc")) {
-        int depth = 3;
-        if( doc->kv.contains("attr:toclevels")) {
-            bool ok = false;
-            const int lv = doc->kv.value("attr:toclevels").trimmed().toInt(&ok);
-            if( ok && lv >= 1 && lv <= 5)
-                depth = lv;
-        }
-        out << "#outline(";
-        if( doc->kv.contains("attr:toc-title"))
-            out << "title: [" << escText(doc->kv.value("attr:toc-title").trimmed()) << "], ";
-        out << "depth: " << depth << ")\n#pagebreak()\n\n";
-    }
-
     // shift heading levels: doc title is level 1 (extracted), body starts at level 2
     int shift = doc->kv.contains("title") ? -1 : 0;
-    for( int i=0;i<doc->children.size();++i) {
+    const QString toc = doc->kv.value("attr:toc").trimmed();
+    const bool hasToc = doc->kv.contains("attr:toc");
+    // Paged output places default and left/right TOCs after the title, and preamble TOCs after preamble content.
+    if( hasToc && toc != "preamble")
+        emitToc(doc, out);
+
+    int preambleEnd = doc->children.size();
+    if( hasToc && toc == "preamble") {
+        for( int i = 0; i < doc->children.size(); ++i) {
+            const Node* n = doc->children[i];
+            if( n && n->kind == Node::K_Section && !hasStyle(n, "discrete")) {
+                preambleEnd = i;
+                break;
+            }
+        }
+    }
+    for( int i = 0; i < preambleEnd; ++i) {
+        if( !emitNode(doc->children[i], out, err, shift))
+            return false;
+        out << "\n";
+    }
+    if( hasToc && toc == "preamble")
+        emitToc(doc, out);
+    for( int i = preambleEnd; i < doc->children.size(); ++i) {
         if( !emitNode(doc->children[i], out, err, shift))
             return false;
         out << "\n";

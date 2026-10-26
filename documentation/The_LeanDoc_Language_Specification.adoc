@@ -12,7 +12,7 @@
 
 === Version
 
-2026-10-08, work in progress
+2026-10-25, work in progress
 
 === Author
 
@@ -287,7 +287,7 @@ characters depends on context, in LeanDoc the rule is uniform.
 === Document Structure
 
 ....
-Document       = [ DocumentHeader ] DocumentBody ;
+Document       = { Comment | BLANK_LINE } [ DocumentHeader ] DocumentBody ;
 
 DocumentHeader = DocumentTitle
                  [ AuthorLine ]
@@ -319,6 +319,13 @@ The document title is the only level-0 heading. It uses a single `=`
 followed by space and the title text. Author and revision lines
 immediately follow the title. Attribute lines (`:name: value`) set
 document-level variables that can be referenced later with `{name}`.
+
+Only comments and blank lines may precede the document title. Any
+other content before it means the document has no header, and its
+`=` line is then a level-0 heading in the body, which is an error. A
+`=` heading anywhere in the body is an error; an included file whose
+top heading uses `=` must be shifted with `leveloffset` (see
+<<include-directive>>).
 
 === Blocks
 
@@ -1200,8 +1207,12 @@ behavior. These form a closed vocabulary:
 |Enable the table of contents. `auto` (the default when the value is
 empty) places it after the document title, `preamble` after the
 preamble. `left` and `right` are rendering hints for HTML backends
-(sidebar placement); paged backends (PDF, Typst) ignore the placement
-and emit the TOC as front matter after the title page.
+(sidebar placement); paged backends (PDF, Typst) treat them as `auto`.
+`auto` and `preamble` apply to all backends: a paged backend emits the
+TOC as front matter after the title page or after the preamble,
+respectively. The _preamble_ is all content between the document
+header and the first section heading; a `[discrete]` heading does not
+end it (see <<special-sections>>).
 
 |`toclevels`
 |`1`..`5`
@@ -1302,7 +1313,10 @@ is a validation error:
 participate in the section hierarchy: it receives no section number,
 does not appear in the table of contents, and does not open a new
 section (the enclosing section continues after it). This is useful for
-headings inside sidebars or for front-matter headings.
+headings inside sidebars or for front-matter headings. A discrete
+heading placed before the first section, together with the blocks
+following it, belongs to the document preamble; one placed inside a
+section belongs to that section.
 
 [[Parts]]
 ==== Parts and Numbering Scheme
@@ -1428,9 +1442,18 @@ separate, mutually exclusive Asciidoctor-compatibility flattening that
 rewrites the output to the shape Asciidoctor's book doctype expects:
 `:doctype: book` and related attributes are added to the header,
 `[part]` sections become level-0 headings (`= Title`) with the sections
-inside a part shifted up one level, and front-matter sections before the
-first part are marked `[preface]`. This transformation affects only the
-derived output; the LeanDoc source language is unchanged.
+inside a part shifted up one level, and front matter is marked as
+follows. Of the level-1 (`==`) headings that precede the first `[part]`
+heading:
+
+* a heading without a role is emitted with the role `[preface]`;
+* a heading with the role `[discrete]` is emitted unchanged and receives
+  no further role; it is not a section, so it and the blocks following
+  it remain in the preamble;
+* a heading with any other role (e.g. `[abstract]`) keeps that role.
+
+This transformation affects only the derived output; the LeanDoc source
+language is unchanged.
 
 == Implementation Notes for Parser Writers
 

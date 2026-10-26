@@ -39,6 +39,8 @@ struct Diagnostic {
 
 class Validator {
 public:
+    Validator():dstrayTitle(0){}
+
     void validate(const Node* doc);
     QList<Diagnostic> diagnostics;
 
@@ -60,6 +62,7 @@ private:
     void warn(quint16 file, int line, const QString& msg);
     void error(quint16 file, int line, const QString& msg);
 
+    const Node* dstrayTitle;
     QSet<QString> danchors; // declared anchor IDs
     QMap<QString, int> danchorLines; // anchor ID -> first occurrence line
     QSet<QString> dautoAnchors; // IDs derived from section titles

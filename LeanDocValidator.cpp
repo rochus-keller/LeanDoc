@@ -51,9 +51,21 @@ void Validator::validate(const Node* doc)
     danchorLines.clear();
     dautoAnchors.clear();
     dambiguousAutoAnchors.clear();
+    dstrayTitle = 0;
 
     if( !doc || doc->kind != Node::K_Document)
         return;
+
+    if( !doc->kv.contains("title")) {
+        for( int i = 0; i < doc->children.size(); ++i) {
+            const Node* child = doc->children[i];
+            if( child && child->kind == Node::K_Section) {
+                if( child->level == 1)
+                    dstrayTitle = child;
+                break;
+            }
+        }
+    }
 
     collectAnchors(doc);
     collectAutoAnchors(doc);
@@ -165,6 +177,13 @@ void Validator::checkNode(const Node* n)
         checkColsOnNonTable(n);
         break;
     case Node::K_Section:
+        if( n->level == 1) {
+            QString msg = "level-0 heading '= " + n->name +
+                          "' outside the document header; only the document title may use a single '='";
+            if( n == dstrayTitle)
+                msg += " (content before it prevents header recognition)";
+            error(n->file, n->pos.row, msg);
+        }
         checkBlockAttrs(n);
         checkRoleContext(n);
         checkColsOnNonTable(n);

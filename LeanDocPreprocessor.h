@@ -37,7 +37,7 @@ struct PreprocessorError {
 
 class Preprocessor {
 public:
-    Preprocessor():dmaxIncludeDepth(8){}
+    Preprocessor():dlevelShift(0),dmaxIncludeDepth(8){}
 
     void setBaseDir(const QString& dir) { dbaseDir = dir; }
     void setDefinedAttrs(const QMap<QString,QString>& attrs) { dattrs = attrs; }
@@ -53,7 +53,7 @@ private:
     void processChildren(Node* parent, int depth);
     void processNode(Node* n, int depth);
 
-    bool resolveInclude(Node* parent, int childIdx, int depth);
+    int resolveInclude(Node* parent, int childIdx, int depth);
     bool evaluateConditional(Node* parent, int childIdx);
     void substituteAttrRefs(Node* n);
     void substituteInlineList(QList<Node*>& inl);
@@ -62,7 +62,7 @@ private:
     QStringList toAsciidoctorCompat(const QStringList& lines);
     void expandVerbatimIncludes(Node* n, int depth);
     void checkIncludeAttrs(const QMap<QString,QString>& attrs, int line);
-    static int parseLevelOffset(const QString& raw, bool* ok);
+    static int parseLevelOffset(const QString& raw, bool* ok, bool* absolute = 0);
     QString rewriteImagePaths(const QString& line, const QString& fromDir);
 
     QString readFile(const QString& path);
@@ -76,6 +76,7 @@ private:
     QString doutDir; // target directory for --flatten path rewriting
     QMap<QString,QString> dattrs;
     QSet<QString> dincludeStack; // circular include detection
+    int dlevelShift;
     int dmaxIncludeDepth;
 };
 

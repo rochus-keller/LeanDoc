@@ -110,6 +110,15 @@ but just like the other section roles; to be still compatible with the latter, t
 other features like xrefstyle, discrete, toclevels, toc position, and include level correction are unavoidable for a real book project. And
 there were a lot of things to fix and clarify. The validator now rejects unknown roles.
 
+### Status on Oct 26, 2026
+
+Meanwhile I started to write another book and finished a study report, all with leanqt, and thus gained more relevant experience which
+helped me improve the tool. The include feature turned out to help too little in case of bugs, so now errors are attached to the exact
+(included) source files with the necessary infrastructure in place. I also had to extend a few constructs such as biblio and normal references
+by inline ID overrides right at the declaration to avoid redundancies spread over the book. There is now also proper support for {} symbols
+("character attributes" in Asciidoc). And eventually I needed a colophon for my Micron book so now there are rules for [discrete] sections
+before the first [part] in face of :toc: preamble. Also a lot of other clarifications and fixes were necessary.
+
 ### Additional Credits
 
 **[AsciiDoc](https://asciidoc.org/)** v. 2.0.26 under [MIT](https://github.com/asciidoctor/asciidoctor/blob/main/LICENSE)
