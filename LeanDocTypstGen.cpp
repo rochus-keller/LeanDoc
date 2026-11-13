@@ -532,7 +532,22 @@ static ColsInfo parseColsSpec(const BlockMeta* m, int fallbackCols)
     QString v = m->attrs.value("cols");
     if( v.startsWith('"') && v.endsWith('"'))
         v = v.mid(1, v.size()-2);
-    const QStringList parts = v.split(',');
+    const QStringList specs = v.split(',');
+    QStringList parts;
+    QRegExp rep("^(\\d+)\\*(.*)$");
+    for( int i = 0; i < specs.size(); ++i) {
+        const QString p = specs[i].trimmed();
+        if( rep.exactMatch(p) ) {
+            const int n = qMin(rep.cap(1).toInt(), fallbackCols);
+            for( int k = 0; k < n; ++k)
+                parts << rep.cap(2);
+        }else if( specs.size() == 1 && QRegExp("\\d+").exactMatch(p) ) {
+            const int n = qMin(p.toInt(), fallbackCols);
+            for( int k = 0; k < n; ++k)
+                parts << "1";
+        }else
+            parts << p;
+    }
     if( parts.isEmpty())
         return ci;
 
@@ -698,6 +713,8 @@ bool TypstGenerator::emitBlockMacro(const Node* n, QTextStream& out, TypstGenErr
         return true;
     }
 
+    if( n->name == "latexmath")
+        return failAt(err, n, "latexmath is not yet supported by the Typst generator");
     return failAt(err, n, "Unsupported block macro in Typst generator: " + n->name);
 }
 
@@ -756,6 +773,8 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
         return true;
 
     case Node::K_Highlight:
+        if( n->kv.contains("role") )
+            return emitInlineSeq(n->children, out, err);
         out << "#highlight([";
         if( !emitInlineSeq(n->children, out, err))
             return false;
@@ -844,6 +863,8 @@ bool TypstGenerator::emitInline(const Node* n, QTextStream& out, TypstGenError* 
             out << "$" << escText(n->target) << "$";
             return true;
         }
+        if( n->name == "latexmath")
+            return failAt(err, n, "latexmath is not yet supported by the Typst generator");
         return failAt(err, n, "Unsupported inline macro in Typst generator: " + n->name);
 
     default:

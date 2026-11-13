@@ -1,0 +1,17 @@
+# Copyright (C) 2026 Rochus Keller (me@rochus-keller.ch)
+# License: GPL 2/3
+
+submod qt = ../LeanQt (HAVE_FILEIO, HAVE_COREAPP, HAVE_RE)
+
+let bootstrap * = qt.copy_moc
+
+let leandoc ! : Executable {
+    .name = "leandoc"
+    .sources += [ ./LeanDoc2Typst.cpp ./LeanDocAst2.cpp ./LeanDocLexer2.cpp
+                  ./LeanDocParser2.cpp ./LeanDocPreprocessor.cpp
+                  ./LeanDocTypstGen.cpp ./LeanDocValidator.cpp ]
+    .configs += qt.qt_client_config;
+    .include_dirs += [ . ../LeanQt ]
+    .cflags_cc += "-std=c++98"
+    .deps += qt.libqtcore
+}

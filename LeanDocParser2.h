@@ -62,7 +62,7 @@ private:
     QList<Node*> parseInlineContent(const QString& s, int lineNo);
     QList<Node*> parseInlineContentRec(const QString& s, int lineNo, int depth);
     void pushText(QList<Node*>& out, const QString& t, int lineNo);
-    QList<Node*> readCells(const LineTok& rowTok);
+    int readCells(const LineTok& rowTok, QStringList& texts, QList<int>& lines);
 
     const LineTok& la(int k=0) const { return dlex.peek(k); }
     LineTok take() { return dlex.take(); }

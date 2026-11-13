@@ -41,7 +41,18 @@ static int parseColsCount(const QString& raw)
         v = v.mid(1, v.size()-2);
     if( v.isEmpty())
         return 0;
-    return v.split(',').size();
+    const QStringList specs = v.split(',');
+    bool ok = false;
+    const int n = specs.first().trimmed().toInt(&ok);
+    if( specs.size() == 1 && ok )
+        return n;
+    int count = 0;
+    foreach( const QString& spec, specs ) {
+        const int star = spec.indexOf('*');
+        const int rep = star > 0 ? spec.left(star).trimmed().toInt(&ok) : 0;
+        count += star > 0 && ok ? rep : 1;
+    }
+    return count;
 }
 
 void Validator::validate(const Node* doc)
@@ -218,7 +229,17 @@ static bool isValidColSpec(const QString& raw)
 
     const QStringList parts = inner.split(',');
     for( int i = 0; i < parts.size(); ++i) {
-        const QString p = parts[i].trimmed();
+        QString p = parts[i].trimmed();
+        const int star = p.indexOf('*');
+        if( star > 0 ) {
+            bool ok = false;
+            p.left(star).toInt(&ok);
+            if( !ok )
+                return false;
+            p = p.mid(star+1);
+            if( p.isEmpty() )
+                continue; // N* alone
+        }
         if( p.isEmpty() )
             return false; // empty entry (trailing/double comma)
 

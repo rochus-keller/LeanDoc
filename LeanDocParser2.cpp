@@ -18,6 +18,7 @@
 */
 
 #include "LeanDocParser2.h"
+#include <QRegExp>
 using namespace LeanDoc;
 
 static inline bool FIRST_section(int k) {
@@ -115,10 +116,19 @@ static bool matchAt(const QString& s, int pos, const char* pat, int patLen)
     return true;
 }
 
+static bool isEscaped(const QString& s, int pos)
+{
+    // true if s[pos] is preceded by an odd number of backslashes
+    int n = 0;
+    while( pos - n - 1 >= 0 && s[pos-n-1] == '\\' )
+        ++n;
+    return n % 2 == 1;
+}
+
 static int findDelim(const QString& s, int start, const char* pat, int patLen)
 {
     for( int i = start; i <= s.size() - patLen; ++i)
-        if( matchAt(s, i, pat, patLen))
+        if( matchAt(s, i, pat, patLen) && !isEscaped(s, i) )
             return i;
     return -1;
 }
@@ -130,25 +140,147 @@ struct InlineDelim {
     int closeLen;
     Node::Kind kind;
     bool recurse;
+    bool constrained;
 };
 
 static const InlineDelim inlineDelims[] = {
-    { "**", 2, "**", 2, Node::K_Bold, true },
-    { "__", 2, "__", 2, Node::K_Italic, true },
-    { "``", 2, "``", 2, Node::K_Monospace, true },
-    { "*",  1, "*",  1, Node::K_Bold, true },
-    { "_",  1, "_",  1, Node::K_Italic, true },
-    { "`",  1, "`",  1, Node::K_Monospace, false },
-    { "#",  1, "#",  1, Node::K_Highlight, true },
-    { "^",  1, "^",  1, Node::K_Superscript, false },
-    { "~",  1, "~",  1, Node::K_Subscript, false }
+    { "**", 2, "**", 2, Node::K_Bold, true, false },
+    { "__", 2, "__", 2, Node::K_Italic, true, false },
+    { "``", 2, "``", 2, Node::K_Monospace, true, false },
+    { "##", 2, "##", 2, Node::K_Highlight, true, false },
+    { "*",  1, "*",  1, Node::K_Bold, true, true },
+    { "_",  1, "_",  1, Node::K_Italic, true, true },
+    { "`",  1, "`",  1, Node::K_Monospace, false, true },
+    { "#",  1, "#",  1, Node::K_Highlight, true, true },
+    { "^",  1, "^",  1, Node::K_Superscript, false, false },
+    { "~",  1, "~",  1, Node::K_Subscript, false, false }
 };
+
+static inline bool isWordChar(QChar c)
+{
+    return c.isLetterOrNumber() || c == '_';
+}
+
+// constrained delimiter at s[open]: preceded by start or a non-word character,
+// content starts and ends with non-space, closing delimiter not followed by a word character
+static int findConstrainedClose(const QString& s, int open, char d)
+{
+    if( open > 0 && isWordChar(s[open-1]))
+        return -1;
+    if( open + 1 >= s.size() || s[open+1].isSpace())
+        return -1;
+    for( int j = open + 2; j < s.size(); ++j)
+    {
+        if( s[j] != QLatin1Char(d))
+            continue;
+        if( s[j-1].isSpace() || (d != '`' && isEscaped(s, j)) )
+            continue;
+        if( j + 1 < s.size() && isWordChar(s[j+1]))
+            continue;
+        return j;
+    }
+    return -1;
+}
+
+// smart quote "`text`" or '`text`' at s[open]; returns the index of the closing backtick, or -1
+static int findSmartQuoteClose(const QString& s, int open)
+{
+    const QChar q = s[open];
+    if( open > 0 && isWordChar(s[open-1]))
+        return -1;
+    if( open + 2 >= s.size() || s[open+2].isSpace())
+        return -1;
+    for( int j = open + 3; j + 1 < s.size(); ++j)
+    {
+        if( s[j] != '`' || s[j+1] != q )
+            continue;
+        if( s[j-1].isSpace() || isEscaped(s, j) )
+            continue;
+        if( j + 2 < s.size() && isWordChar(s[j+2]))
+            continue;
+        return j;
+    }
+    return -1;
+}
+
+static inline bool isEscapable(QChar c)
+{
+    static const QString set = "*_`^~#[]{}<>\\+.:|";
+    return set.contains(c);
+}
 static const int inlineDelimCount = (int)(sizeof(inlineDelims) / sizeof(inlineDelims[0]));
+
+static int matchInlineDelim(const QString& s, int i, int* close)
+{
+    for( int d = 0; d < inlineDelimCount; ++d) {
+        const InlineDelim& dl = inlineDelims[d];
+        if( !matchAt(s, i, dl.open, dl.openLen))
+            continue;
+        const int j = dl.openLen == 1 && dl.constrained
+                ? findConstrainedClose(s, i, dl.open[0])
+                : findDelim(s, i + dl.openLen, dl.close, dl.closeLen);
+        if( j > i + dl.openLen) {
+            *close = j;
+            return d;
+        }
+    }
+    return -1;
+}
+
+// length of a role prefix [.name] at s[i], or 0
+static int rolePrefixLen(const QString& s, int i)
+{
+    if( !matchAt(s, i, "[.", 2))
+        return 0;
+    int j = i + 2;
+    while( j < s.size() && (s[j].isLetterOrNumber() || s[j] == '-' || s[j] == '_'))
+        ++j;
+    if( j == i + 2 || j >= s.size() || s[j] != ']')
+        return 0;
+    return j + 1 - i;
+}
+
+static inline bool isEmailLocalChar(QChar c)
+{
+    return c.isLetterOrNumber() || c == '.' || c == '_' || c == '%' || c == '+' || c == '-';
+}
+
+static inline bool isEmailDomainChar(QChar c)
+{
+    return c.isLetterOrNumber() || c == '-';
+}
+
+// length of a bare email address starting at s[i], or 0
+static int emailLen(const QString& s, int i)
+{
+    if( !s[i].isLetterOrNumber() || (i > 0 && isEmailLocalChar(s[i-1])) )
+        return 0;
+    int j = i;
+    while( j < s.size() && isEmailLocalChar(s[j]) )
+        ++j;
+    if( j >= s.size() || s[j] != '@' )
+        return 0;
+    ++j;
+    int labels = 0;
+    int end = 0;
+    while( j < s.size() && isEmailDomainChar(s[j]) ) {
+        while( j < s.size() && isEmailDomainChar(s[j]) )
+            ++j;
+        ++labels;
+        end = j;
+        if( j + 1 < s.size() && s[j] == '.' && isEmailDomainChar(s[j+1]) )
+            ++j;
+        else
+            break;
+    }
+    return labels >= 2 ? end - i : 0;
+}
 
 static bool isUrlSchemeStart(const QString& s, int i)
 {
     return s.mid(i).startsWith("http://") || s.mid(i).startsWith("https://") ||
-           s.mid(i).startsWith("ftp://")  || s.mid(i).startsWith("mailto:");
+           s.mid(i).startsWith("ftp://")  || s.mid(i).startsWith("irc://") ||
+           s.mid(i).startsWith("mailto:");
 }
 
 static bool isInlineMacroName(const QString& name)
@@ -358,7 +490,7 @@ static bool looksLikeAuthorLine(const QString& s)
     if( names.isEmpty())
         return false;
     // must be one or more whitespace-separated identifiers
-    const QStringList words = names.split(' ', Qt::SkipEmptyParts);
+    const QStringList words = names.split(' ', QString::SkipEmptyParts);
     if( words.isEmpty())
         return false;
     for( int i = 0; i < words.size(); ++i) {
@@ -664,6 +796,14 @@ Node* Parser::parseParagraphOrLiteral(BlockMeta* m)
     return p;
 }
 
+static QString joinContinuation(const QString& text, const QString& cont)
+{
+    // joins a wrapped line; a trailing " +" becomes a hard line break
+    if( text.endsWith(" +"))
+        return text.left(text.size()-2) + "\n " + cont;
+    return text + " " + cont;
+}
+
 Node* Parser::parseAdmonitionParagraph(BlockMeta* m)
 {
     LineTok t = take();
@@ -679,7 +819,10 @@ Node* Parser::parseAdmonitionParagraph(BlockMeta* m)
     // a paragraph admonition runs until a blank line (or any block terminator);
     // gather the first line's text plus contiguous continuation lines.
     QStringList lines;
-    lines << s.mid(colon+1).trimmed();
+    QString first = s.mid(colon+1).trimmed();
+    if( first.endsWith(" +"))
+        first = first.left(first.size()-2) + "\n";
+    lines << first;
     while( la(0).kind == LineTok::T_TEXT) {
         const QString cont = la(0).raw.trimmed();
         if( cont.isEmpty())
@@ -765,6 +908,13 @@ Node* Parser::parseList(BlockMeta* m)
             int c = 0;
             for( int i = ts.size()-1; i >= 0 && ts[i] == ':'; --i)
                 ++c;
+            QString sameLineDef;
+            int defPos = 0;
+            const int sc = Lexer::descTermColons(ts, &defPos);
+            if( sc > 0 && defPos < ts.size() ) {
+                c = sc;
+                sameLineDef = ts.mid(defPos).trimmed();
+            }
 
             if( c < 2 || c > 4 )
                 error("description list nesting depth " + QString::number(c) +
@@ -774,19 +924,24 @@ Node* Parser::parseList(BlockMeta* m)
             item->pos = RowCol(termTok.lineNo, 1);
             item->file = file;
             item->level = c;
-            item->name = ts.left(ts.size()-c).trimmed();
+            item->name = sameLineDef.isEmpty() ? ts.left(ts.size()-c).trimmed()
+                                               : ts.left(defPos-c).trimmed();
 
-            // optional definition on next line(s)
-            if( la(0).kind == LineTok::T_TEXT && !la(0).raw.trimmed().isEmpty()) {
-                LineTok defTok = la(0);
-                QString defText = la(0).raw.trimmed();
-                take();
+            // optional definition on the same or next line(s)
+            if( !sameLineDef.isEmpty() ||
+                    (la(0).kind == LineTok::T_TEXT && !la(0).raw.trimmed().isEmpty())) {
+                LineTok defTok = sameLineDef.isEmpty() ? la(0) : termTok;
+                QString defText = sameLineDef;
+                if( defText.isEmpty() ) {
+                    defText = la(0).raw.trimmed();
+                    take();
+                }
                 // collect wrapped continuation lines
                 while( la(0).kind == LineTok::T_TEXT) {
                     const QString cont = la(0).raw.trimmed();
                     if( cont.isEmpty() )
                         break;
-                    defText += " " + cont;
+                    defText = joinContinuation(defText, cont);
                     take();
                 }
                 Node* defPara = new Node(Node::K_Paragraph);
@@ -848,7 +1003,7 @@ Node* Parser::parseList(BlockMeta* m)
             const QString cont = la(0).raw.trimmed();
             if( cont.isEmpty() )
                 break;
-            payload += " " + cont;
+            payload = joinContinuation(payload, cont);
             take();
         }
 
@@ -875,21 +1030,40 @@ Node* Parser::parseList(BlockMeta* m)
     return lst;
 }
 
-QList<Node*> Parser::readCells(const LineTok& rowTok)
+// span specifier such as 2+ or .2+ at the end of the text before a |
+static bool endsWithSpanSpec(const QString& text)
 {
-    QList<Node*> cells;
-    const QStringList parts = splitUnescapedPipe(rowTok.raw.trimmed());
-    for( int i = 0; i < parts.size(); ++i) {
-        if( parts[i].isEmpty() && i == 0 )
-            continue;  // skip leading empty before first |
-        Node* cell = new Node(Node::K_TableCell);
-        cell->pos = RowCol(rowTok.lineNo, 1);
-        cell->file = file;
-        cell->children = parseInlineContent(parts[i], rowTok.lineNo);
-        cells.append(cell);
-    }
-    return cells;
+    static const QRegExp re("(^|\\s)(\\d+\\+|\\.\\d+\\+|\\d+\\.\\d+\\+)[<^>]?(\\.[<^>])?[adehlmsv]?$");
+    return re.indexIn(text) >= 0;
 }
+
+int Parser::readCells(const LineTok& rowTok, QStringList& texts, QList<int>& lines)
+{
+    const QStringList parts = splitUnescapedPipe(rowTok.raw.trimmed());
+    if( !parts.first().isEmpty() ) {
+        // text before the first | continues the previous cell
+        if( texts.isEmpty() )
+            error("table content before the first cell", rowTok.lineNo);
+        else if( texts.last().isEmpty() )
+            texts.last() = parts.first();
+        else
+            texts.last() = joinContinuation(texts.last(), parts.first());
+    }
+    for( int i = 1; i < parts.size(); ++i) {
+        if( i + 1 < parts.size() && endsWithSpanSpec(parts[i]) )
+            error("cell specifiers are not yet supported", rowTok.lineNo);
+        texts.append(parts[i]);
+        lines.append(rowTok.lineNo);
+    }
+    return parts.size() - 1;
+}
+
+static bool hasCellSpec(const QString& line)
+{
+    static const QRegExp re("^(\\d+\\*|\\d+\\+|\\.\\d+\\+|\\d+\\.\\d+\\+)?[<^>]?(\\.[<^>])?[adehlmsv]?\\|");
+    return re.indexIn(line) == 0 && re.matchedLength() > 1;
+}
+
 
 static int colsCount(const BlockMeta* m)
 {
@@ -900,7 +1074,18 @@ static int colsCount(const BlockMeta* m)
         v = v.mid(1, v.size()-2);
     if( v.isEmpty())
         return 0;
-    return v.split(',').size();
+    const QStringList specs = v.split(',');
+    bool ok = false;
+    const int n = specs.first().trimmed().toInt(&ok);
+    if( specs.size() == 1 && ok )
+        return n;
+    int count = 0;
+    foreach( const QString& spec, specs ) {
+        const int star = spec.indexOf('*');
+        const int rep = star > 0 ? spec.left(star).trimmed().toInt(&ok) : 0;
+        count += star > 0 && ok ? rep : 1;
+    }
+    return count;
 }
 
 Node* Parser::parseTable(BlockMeta* m)
@@ -918,32 +1103,44 @@ Node* Parser::parseTable(BlockMeta* m)
 
     // collect all cells into a flat list; track first blank-line position
     // and max cells-per-line (for column count fallback)
-    QList<Node*> allCells;
+    QStringList cellTexts;
+    QList<int> cellLines;
     int firstBlankPos = -1; // cell index at which first blank line after cells occurs
     int firstLineCells = 0; // cells produced by the first TABLE_LINE
     bool seenCell = false;
+    bool closed = false;
 
     while( !dlex.atEnd()) {
         if( la(0).kind == LineTok::T_TABLE_DELIM) {
             take();
+            closed = true;
             break;
         }
         if( la(0).kind == LineTok::T_BLANK) {
             if( seenCell && firstBlankPos < 0)
-                firstBlankPos = allCells.size();
+                firstBlankPos = cellTexts.size();
             take();
             continue;
         }
-        if( la(0).kind == LineTok::T_TABLE_LINE) {
-            QList<Node*> cells = readCells(la(0));
-            if( !seenCell)
-                firstLineCells = cells.size();
-            allCells += cells;
+        if( hasCellSpec(la(0).raw.trimmed()) )
+            error("cell specifiers are not yet supported", la(0).lineNo);
+        const int n = readCells(la(0), cellTexts, cellLines);
+        if( !seenCell && n > 0 ) {
+            firstLineCells = n;
             seenCell = true;
-            take();
-        } else {
-            take();
         }
+        take();
+    }
+    if( !closed )
+        error("unterminated table", open.lineNo);
+
+    QList<Node*> allCells;
+    for( int i = 0; i < cellTexts.size(); ++i) {
+        Node* cell = new Node(Node::K_TableCell);
+        cell->pos = RowCol(cellLines[i], 1);
+        cell->file = file;
+        cell->children = parseInlineContent(cellTexts[i], cellLines[i]);
+        allCells.append(cell);
     }
 
     if( allCells.isEmpty())
@@ -1100,8 +1297,8 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
     int i = 0;
     while( i < s.size()) {
 
-        // escape: \CHAR produces literal CHAR
-        if( s[i] == '\\' && i + 1 < s.size()) {
+        // escape: \CHAR produces literal CHAR for markup-significant CHAR
+        if( s[i] == '\\' && i + 1 < s.size() && isEscapable(s[i+1])) {
             acc.append(s[i+1]);
             i += 2;
             continue;
@@ -1208,6 +1405,20 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
             continue;
         }
 
+        // bare email address
+        const int el = emailLen(s, i);
+        if( el > 0 ) {
+            pushText(out, acc, lineNo); acc.clear();
+            Node* lk = new Node(Node::K_Link);
+            lk->pos = RowCol(lineNo, 1);
+            lk->file = file;
+            lk->target = "mailto:" + s.mid(i, el);
+            pushText(lk->children, s.mid(i, el), lineNo);
+            out.append(lk);
+            i += el;
+            continue;
+        }
+
         // inline macro: name:target[attrs]
         if( s[i].isLetter()) {
             int colon = s.indexOf(':', i);
@@ -1219,6 +1430,9 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
 
                     if( lb > colon && lb < s.size()) {
                         int rb = s.indexOf(']', lb+1);
+                        if( macroName == "latexmath")
+                            while( rb > 0 && s[rb-1] == '\\' )
+                                rb = s.indexOf(']', rb+1);
 
                         if( rb > lb) {
                             pushText(out, acc, lineNo); acc.clear();
@@ -1231,6 +1445,8 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
                             // image attributes (alt,width,height) are positional data, not inline content: keep them raw
                             if( macroName == "image")
                                 mn->text = inner;
+                            else if( macroName == "latexmath")
+                                mn->text = QString(inner).replace("\\]", "]");
                             else if( !inner.isEmpty())
                                 mn->children = parseInlineContentRec(inner, lineNo, depth+1);
                             out.append(mn);
@@ -1242,34 +1458,61 @@ QList<Node*> Parser::parseInlineContentRec(const QString& s, int lineNo, int dep
             }
         }
 
-        // formatting delimiters (table-driven)
-        {
-            bool matched = false;
-            for( int d = 0; d < inlineDelimCount; ++d) {
-                const InlineDelim& dl = inlineDelims[d];
-
-                if( matchAt(s, i, dl.open, dl.openLen)) {
-                    int j = findDelim(s, i + dl.openLen, dl.close, dl.closeLen);
-
-                    if( j > i + dl.openLen) {
-                        pushText(out, acc, lineNo); acc.clear();
-                        Node* n = new Node(dl.kind);
-                        n->pos = RowCol(lineNo, 1);
-                        n->file = file;
-                        const QString inner = s.mid(i + dl.openLen, j - (i + dl.openLen));
-                        if( dl.recurse)
-                            n->children = parseInlineContentRec(inner, lineNo, depth+1);
-                        else
-                            n->text = inner;
-                        out.append(n);
-                        i = j + dl.closeLen;
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-            if( matched )
+        // index terms ((visible)) and (((hidden)))
+        if( matchAt(s, i, "(((", 3)) {
+            int j = findDelim(s, i+3, ")))", 3);
+            if( j > i+3) {
+                i = j + 3;
                 continue;
+            }
+        }
+        if( matchAt(s, i, "((", 2)) {
+            int j = findDelim(s, i+2, "))", 2);
+            if( j > i+2) {
+                pushText(out, acc, lineNo); acc.clear();
+                out += parseInlineContentRec(s.mid(i+2, j-(i+2)), lineNo, depth+1);
+                i = j + 2;
+                continue;
+            }
+        }
+
+        // smart quotes
+        if( (s[i] == '"' || s[i] == '\'') && i + 1 < s.size() && s[i+1] == '`' ) {
+            const int j = findSmartQuoteClose(s, i);
+            if( j > 0 ) {
+                const bool dq = s[i] == '"';
+                pushText(out, acc, lineNo); acc.clear();
+                pushText(out, QString(QChar(dq ? 0x201C : 0x2018)), lineNo);
+                out += parseInlineContentRec(s.mid(i+2, j-(i+2)), lineNo, depth+1);
+                acc.append(QChar(dq ? 0x201D : 0x2019));
+                i = j + 2;
+                continue;
+            }
+        }
+
+        // formatting delimiters (table-driven), optionally preceded by a role [.name]
+        {
+            const int rl = rolePrefixLen(s, i);
+            int j = -1;
+            const int d = matchInlineDelim(s, i + rl, &j);
+            if( d >= 0 ) {
+                const InlineDelim& dl = inlineDelims[d];
+                pushText(out, acc, lineNo); acc.clear();
+                Node* n = new Node(dl.kind);
+                n->pos = RowCol(lineNo, 1);
+                n->file = file;
+                if( rl > 0 )
+                    n->kv.insert("role", s.mid(i+2, rl-3));
+                const int start = i + rl + dl.openLen;
+                const QString inner = s.mid(start, j - start);
+                if( dl.recurse)
+                    n->children = parseInlineContentRec(inner, lineNo, depth+1);
+                else
+                    n->text = inner;
+                out.append(n);
+                i = j + dl.closeLen;
+                continue;
+            }
         }
 
         // default: accumulate character

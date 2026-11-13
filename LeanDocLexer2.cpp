@@ -170,6 +170,14 @@ LineTok Lexer::classify(const QString& line, int lineNo)
             return t;
         }
     }
+    // description list: term:: definition on the same line
+    if( !line.isEmpty() && !line[0].isSpace() ) {
+        int pos = 0;
+        if( descTermColons(s, &pos) > 0 && pos < s.size() ) {
+            t.kind = LineTok::T_DESC_TERM;
+            return t;
+        }
+    }
 
     // known block macros
     if( s.startsWith("include::") ) {
@@ -279,4 +287,24 @@ LineTok Lexer::classify(const QString& line, int lineNo)
     return t;
 }
 
+// colon run (2..4) after a non-empty term, followed by end of line or whitespace; *pos is the index after the run
+int Lexer::descTermColons(const QString& s, int* pos)
+{
+    for( int i = 1; i + 1 < s.size(); ++i) {
+        if( s[i] != ':' || s[i+1] != ':' || s[i-1] == ':' || s[i-1].isSpace() )
+            continue;
+        int j = i;
+        while( j < s.size() && s[j] == ':' )
+            ++j;
+        if( j < s.size() && !s[j].isSpace() )
+            continue;
+        if( j - i > 4 )
+            continue;
+        *pos = j;
+        return j - i;
+    }
+    return 0;
+}
+
 } // namespace LeanDoc
+

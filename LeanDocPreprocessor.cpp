@@ -128,7 +128,7 @@ void Preprocessor::substituteInlineList(QList<Node*>& inl)
 static QMap<QString,QString> parseIncludeAttrs(const QString& attrsStr)
 {
     QMap<QString,QString> res;
-    const QStringList parts = attrsStr.split(',', Qt::SkipEmptyParts);
+    const QStringList parts = attrsStr.split(',', QString::SkipEmptyParts);
     for( int i = 0; i < parts.size(); ++i) {
         const QString p = parts[i].trimmed();
         if( p.isEmpty())
@@ -327,7 +327,7 @@ bool Preprocessor::evaluateConditional(Node* parent, int childIdx)
     QString condStr = (lb >= 0) ? raw.left(lb).trimmed() : raw;
 
     // check condition: OR logic (any attribute defined)
-    QStringList attrs = condStr.split(',', Qt::SkipEmptyParts);
+    QStringList attrs = condStr.split(',', QString::SkipEmptyParts);
     bool anyDefined = false;
     for( int i = 0; i < attrs.size(); ++i) {
         if( dattrs.contains(attrs[i].trimmed())) {
@@ -771,7 +771,7 @@ QStringList Preprocessor::filterByTags(const QStringList& lines, const QString& 
 {
     // include the union of several tagged regions: tags=name1;name2
     QStringList result;
-    const QStringList tags = tagsSpec.split(';', Qt::SkipEmptyParts);
+    const QStringList tags = tagsSpec.split(';', QString::SkipEmptyParts);
     QSet<QString> active;
 
     for( int i = 0; i < lines.size(); ++i) {
@@ -799,7 +799,7 @@ QStringList Preprocessor::filterByLines(const QStringList& lines, const QString&
 {
     // parse "N..M" or "N;M;P" or "N..M;P..Q"
     QStringList result;
-    QStringList ranges = spec.split(';', Qt::SkipEmptyParts);
+    QStringList ranges = spec.split(';', QString::SkipEmptyParts);
 
     for( int r = 0; r < ranges.size(); ++r) {
         QString range = ranges[r].trimmed();

@@ -12,7 +12,7 @@
 
 === Version
 
-2026-10-25, work in progress
+2026-11-13, work in progress
 
 === Author
 
@@ -103,7 +103,7 @@ lines with at least one space. See <<Paragraphs>>.
 Text can be formatted inline using delimiter characters:
 
 * `\*bold*` for *bold*, `\_italic_` for _italic_, and +
-  `++`++mono++`++` for monospace
+  text between backticks for `monospace`
 * `\^super^` for superscript, `\~sub~` for subscript
 * `\#highlight#` for highlighted text
 
@@ -622,26 +622,31 @@ Table = LINE_START PIPE EQUALS{3} LINE_END
         TableContent
         LINE_START PIPE EQUALS{3} LINE_END ;
 
-TableContent = ( TableRow | BLANK_LINE )* ;
+TableContent = ( TableLine | BLANK_LINE )* ;
 
-TableRow     = LINE_START ( PIPE TableCell )+ LINE_END ;
+TableLine    = LINE_START [ CellText ] ( [ CellSpec ] PIPE CellText )* LINE_END ;
 
-TableCell    = [ CellSpec ] InlineContent ;
+CellText     = InlineContent ;   (* up to the next unescaped PIPE *)
 
-CellSpec     = [ ColSpan "+" ] [ Alignment ] ;
+CellSpec     = [ Span "+" ] [ Alignment ] ;
 
-ColSpan      = DIGIT+ ;
+Span         = DIGIT+ | "." DIGIT+ | DIGIT+ "." DIGIT+ ;   (* cols, .rows, cols.rows *)
 
 Alignment    = "<" | "^" | ">" ;
 ....
 
-Tables open and close with `|===`. Each cell is separated by `|`.
+Tables open and close with `|===`; a table not closed before the end
+of the document is an error. Each cell starts with `|` and extends to
+the next unescaped `|`, also across line breaks: text on a line that
+does not start with `|` continues the last cell of the previous line
+(joined by a space). Use `\|` for a literal pipe in a cell.
 The first row is promoted to a header row if followed by a blank line.
 
 Table behavior is controlled by attributes placed before the `|===`
 delimiter:
 
 * `[cols="1,2,3"]` -- defines column count and relative widths
+* `[cols="3"]` or `[cols="3*"]` -- defines three equal columns
 * `[cols="<,^,>"]` -- defines column alignment (left, center, right)
 * `[options="header"]` -- explicitly marks the first row as a header
 
@@ -667,6 +672,8 @@ InlineElement = Bold | Italic | Monospace
               | UnconstrainedBold | UnconstrainedItalic
               | UnconstrainedMonospace
               | Superscript | Subscript | Highlight
+              | UnconstrainedHighlight
+              | SmartQuote
               | CustomRole
               | Link | Image
               | InlineAnchor | BiblioAnchor | CrossReference
@@ -683,14 +690,23 @@ Monospace = BACKTICK VerbatimRun BACKTICK ;
 (* Unconstrained formatting: works anywhere, even mid-word *)
 UnconstrainedBold     = STAR{2} InlineContent STAR{2} ;
 UnconstrainedItalic   = UNDERSCORE{2} InlineContent UNDERSCORE{2} ;
-UnconstrainedMonospace = BACKTICK{2} VerbatimRun BACKTICK{2} ;
+UnconstrainedMonospace = BACKTICK{2} InlineContent BACKTICK{2} ;
+
+Highlight              = HASH InlineContent HASH ;
+UnconstrainedHighlight = HASH{2} InlineContent HASH{2} ;
+
+(* Constrained like Bold *)
+SmartQuote = '"' BACKTICK InlineContent BACKTICK '"'
+           | "'" BACKTICK InlineContent BACKTICK "'" ;
 
 (* These use plain text only -- no nested formatting *)
 Superscript = CARET ( ANY_CHAR - ( CARET | NEWLINE ) )+ CARET ;
 Subscript   = TILDE ( ANY_CHAR - ( TILDE | NEWLINE ) )+ TILDE ;
-Highlight   = HASH ( ANY_CHAR - ( HASH | NEWLINE ) )+ HASH ;
 
-CustomRole  = "[" "." IDENTIFIER "]" HASH InlineContent HASH ;
+CustomRole  = "[" "." IDENTIFIER "]"
+              ( Bold | Italic | Monospace | Highlight
+              | UnconstrainedBold | UnconstrainedItalic
+              | UnconstrainedMonospace | UnconstrainedHighlight ) ;
 
 AttributeReference = BRACE_OPEN IDENTIFIER BRACE_CLOSE ;
 
@@ -706,13 +722,18 @@ VerbatimRun = ( ANY_CHAR - ( BACKTICK | NEWLINE ) )+ ;
 
 LeanDoc distinguishes two forms of inline formatting:
 
-* *Constrained* (single delimiter: `*bold*`, `_italic_`): Requires
-  word boundaries -- the opening delimiter must be preceded by whitespace
-  or start of line, and the closing delimiter must be followed by
-  whitespace, punctuation, or end of line.
+* *Constrained* (single delimiter: `*bold*`, `_italic_`,
+  `#highlight#`, single backticks for `mono`): Requires word boundaries -- the opening
+  delimiter must not be preceded by a letter, digit or `_` and must be
+  followed by a non-space character; the closing delimiter must be
+  preceded by a non-space character and must not be followed by a
+  letter, digit or `_`. Otherwise the delimiter is ordinary text, so
+  `snake_case_name` and `2*3*4` need no escaping.
 
-* *Unconstrained* (double delimiter: `**bold**`, `__italic__`): Works
-  anywhere, including mid-word. Use `**B**old` to format just the "B".
+* *Unconstrained* (double delimiter: `**bold**`, `__italic__`,
+  `##highlight##`, double backticks for ``mono``): Works anywhere, including mid-word
+  and with leading or trailing spaces in the content. Use `**B**old` to
+  format just the "B".
 
 This distinction exists because single `*` and `_` appear frequently in
 regular text (e.g., multiplication, file paths). The word boundary rule
@@ -729,17 +750,36 @@ delimiter ends the span.
 The same formatting type cannot nest within itself (e.g., `*bold *nested*
 bold*` is not valid). This keeps parsing deterministic.
 
-Monospace (`++`++text++`++`), superscript (`^text^`), subscript (`~text~`), and
-highlight (`#text#`) do not permit nested formatting -- their content is
+Constrained monospace (single backticks), superscript (`^text^`) and
+subscript (`~text~`) do not permit nested formatting -- their content is
 treated as plain text. This reflects their typical use for short,
-literal spans.
+literal spans. Unconstrained monospace (double backticks) and highlight
+(`#text#`, `##text##`) permit nested formatting.
+
+A role prefix `[.name]` immediately before a formatted span attaches
+the role to it, e.g. `[.red]#*styled*#`. With a role, `#...#` denotes a
+plain styled span rather than a highlight.
 
 ==== Smart Quotes
 
 Backtick-quote combinations produce typographic (curly) quotes:
 
-* ++"`++ and ++`"++ produce left and right double quotes
-* ++'`++ and ++`'++ produce left and right single quotes
+* `"` followed by a backtick and a backtick followed by `"` produce left
+  and right double quotes
+* `'` followed by a backtick and a backtick followed by `'` produce left
+  and right single quotes
+
+The opening and closing combinations only work as a pair and follow the
+same word-boundary rules as the constrained delimiters. The quoted text
+may contain formatting. A combination without its partner, or inside
+single-backtick monospace, stays literal:
+
+....
+"`quoted`" and '`single`'   ->  “quoted” and ‘single’
+....
+
+AsciiDoc's curly apostrophe (a backtick followed by `'` with no opening
+partner) is not supported; write a plain apostrophe.
 
 ==== Line Breaks
 
@@ -762,13 +802,11 @@ URLAutoLink = URL_SCHEME URL_PATH ;
 URL_SCHEME  = ( "http" | "https" | "ftp" | "irc" | "mailto" ) ":" ;
 URL_PATH    = ( ANY_CHAR - ( WHITESPACE | NEWLINE | "[" | "]" ) )+ ;
 
-URLWithText = URL_SCHEME URL_PATH "[" InlineContent
-              [ "," AttributeEntry { "," AttributeEntry } ] "]" ;
+URLWithText = URL_SCHEME URL_PATH "[" InlineContent "]" ;
 
 EmailLink   = IDENTIFIER "@" IDENTIFIER ( "." IDENTIFIER )+ ;
 
-InlineAnchor   = "[[" IDENTIFIER [ "," InlineContent ] "]]"
-               | "[" "#" IDENTIFIER "]" ;
+InlineAnchor   = "[[" IDENTIFIER [ "," InlineContent ] "]]" ;
 
 BiblioAnchor   = "[[[" IDENTIFIER [ "," InlineContent ] "]]]" ;
 
@@ -780,9 +818,8 @@ CrossReference = "<<" IDENTIFIER [ "," InlineContent ] ">>"
 automatically converted to clickable links.
 
 *URL with text*: Appending `[text]` to a URL provides custom link text.
-Additional attributes (roles, target window) can be added after a comma.
-The shorthand `^` at the end of link text (e.g., `https://example.org[text^]`)
-opens the link in a new window.
+The brackets contain link text only; link attributes (roles, target
+window, the `^` shorthand) are not supported.
 
 *Email links*: Email addresses are auto-linked. Use
 `mailto:user@example.org[Contact]` for custom text.
@@ -881,7 +918,9 @@ MathExpression = ( ANY_CHAR - "]" | "\\]" )* ;
 ....
 
 Mathematical formulas use LaTeX notation via the `latexmath:` macro.
-The content between brackets is passed directly to a LaTeX renderer.
+The content between brackets is passed unchanged to a LaTeX renderer.
+An output format without a LaTeX renderer shall report the formula as not
+supported instead of rendering it wrongly.
 A literal `]` inside the expression must be escaped as `\]`.
 
 For *inline math*, embed the macro within text:
@@ -1045,6 +1084,9 @@ index entry (added to index but not visible in text):
 The ((parser)) analyzes syntax.
 (((recursive descent))) This technique is widely used.
 ....
+
+If the renderer does not generate an index, a visible term is
+rendered as its text, a hidden entry produces no output.
 
 === Comments
 
@@ -1265,10 +1307,13 @@ from being interpreted as markup:
 
 The rule is simple and uniform: `\` + any character from the set
 `* _ ` ^ ~ # [ ] { } < > \ + . : |` produces that character literally.
+A backslash before any other character is itself literal (`C:\temp`
+needs no escaping).
 
 NOTE: This is simpler than AsciiDoc's escaping rules, where the
 behavior depends on context. In LeanDoc, the backslash escape always
-works the same way. When in doubt about whether a character will be
+works the same way, except inside single-backtick monospace, whose
+content is literal. When in doubt about whether a character will be
 interpreted as markup, escape it.
 
 [[special-sections]]
@@ -1528,22 +1573,22 @@ preferring the first match.
 |===
 |Line prefix |Block type
 
-|`= ` (one `=` + space)
+|``= `` (one `=` + space)
 |Document title (level 0)
 
-|`== ` through `====== `
+|``== `` through ``====== ``
 |Section heading (levels 1-5)
 
-|`* ` (star + space)
+|``* `` (star + space)
 |Unordered list item (level 1)
 
-|`** ` through `****** `
+|``** `` through ``****** ``
 |Unordered list item (levels 2-6)
 
-|`. ` (dot + space)
+|``. `` (dot + space)
 |Ordered list item (level 1)
 
-|`.. ` through `...... `
+|``.. `` through ``...... ``
 |Ordered list item (levels 2-6)
 
 |`.X` (dot + non-space)
@@ -1795,14 +1840,14 @@ how.
 |
 
 |Link attributes
-|Identical
+|Not supported
 |
 
 |Email auto-linking
 |Identical
 |
 
-|Anchors (`[[id]]`, `[#id]`)
+|Anchors (inline `[[id]]`, block `[#id]`)
 |Identical
 |
 

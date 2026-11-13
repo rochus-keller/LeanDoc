@@ -88,6 +88,7 @@ public:
     const LineTok& peek(int k=0) const;
     LineTok take();
     bool atEnd() const;
+    static int descTermColons(const QString& line, int* pos);
 
 private:
     static LineTok classify(const QString& line, int lineNo);
